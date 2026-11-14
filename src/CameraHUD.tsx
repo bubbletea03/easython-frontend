@@ -8,10 +8,9 @@ function Icon({ name, direction }: { name: 'mic' | 'stop' | 'listening' | 'arrow
   return <svg viewBox="0 -960 960 960" className="hud-icon" aria-hidden="true"><path d={designIcons[name]} /></svg>;
 }
 
-export function CameraHUD({ scene, heard, active, pending = false, onStop, onVoice }: { scene: SceneUI; heard: string; active: boolean; pending?: boolean; onStop: () => void; onVoice: () => void }) {
+export function CameraHUD({ scene, heard, active, pending = false, onVoice }: { scene: SceneUI; heard: string; active: boolean; pending?: boolean; onVoice: () => void }) {
   const working = active || ['listening','processing','searching','found','guiding','lost','warning'].includes(scene.state);
   const isListening = scene.state === 'listening';
-  const canStop = !isListening && (active || pending);
   return <>
     <div className="camera-scrim top" aria-hidden="true" /><div className="camera-scrim bottom" aria-hidden="true" />
     {working && <div className={`state-frame${scene.state === 'warning' ? ' danger' : ''}${scene.state === 'lost' ? ` lost-${scene.lostSide}` : ''}`} aria-hidden="true" />}
@@ -25,12 +24,12 @@ export function CameraHUD({ scene, heard, active, pending = false, onStop, onVoi
         {scene.state === 'warning' ? <Icon name="warning" /> : scene.direction ? <Icon name="arrow" direction={scene.direction} /> : null}
         <div><b>{scene.title}</b>{scene.detail && <small>{scene.detail}</small>}</div>
       </div>}
-      <button type="button" className={`voice-orb${isListening ? ' is-listening' : ''}`} onClick={canStop ? onStop : onVoice}
-        aria-label={canStop ? '그만. 탐색과 안내를 멈춥니다' : isListening ? '음성 인식 중지' : '말하기. 찾을 물건이나 명령을 말씀해 주세요'} aria-pressed={isListening}>
+      <button type="button" className={`voice-orb${isListening ? ' is-listening' : ''}`} onClick={onVoice}
+        aria-label={isListening ? '음성 입력 종료' : active || pending ? '안내를 멈추고 말하기. 잡았어, 어떻게 잡아, 그만이라고 말해 주세요' : '말하기. 찾을 물건이나 명령을 말씀해 주세요'} aria-pressed={isListening}>
         {isListening && <><span className="orb-ring ring-1" /><span className="orb-ring ring-2" /><span className="orb-ring ring-3" /></>}
-        <Icon name={canStop ? 'stop' : isListening ? 'listening' : 'mic'} />
+        <Icon name={isListening ? 'listening' : 'mic'} />
       </button>
-      <p className="orb-label" aria-hidden="true">{canStop ? '그만' : isListening ? '듣고 있어요' : '말하기'}</p>
+      <p className="orb-label" aria-hidden="true">{isListening ? '듣고 있어요' : active || pending ? '멈추고 말하기' : '말하기'}</p>
     </div>
   </>;
 }

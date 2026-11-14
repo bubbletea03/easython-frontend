@@ -15,9 +15,9 @@ test('search, found, guiding and lost use real scene data', () => {
   assert.equal(guide.title,'왼쪽으로');
   const overlap=deriveScene({...idle,running:true,found:true,guiding:true});
   assert.equal(overlap.state,'guiding');
-  assert.equal(overlap.title,'위치가 맞아요');
-  assert.equal(overlap.detail,'아직 닿지 않았다면 손을 조금 더 뻗어 보세요.');
-  assert.doesNotMatch(overlap.title,/잡으세요|잡았어요/);
+  assert.equal(overlap.title,'거기예요. 그대로 쭉 뻗어 잡으세요');
+  assert.match(overlap.detail!,/버튼을 누르고 잡았어/);
+  assert.doesNotMatch(overlap.title,/잡았어요|잡으셨/);
   assert.equal(deriveScene({...idle,running:true,lost:true,lostSide:'right'}).lostSide,'right');
 });
 test('real safety overrides normal guidance and camera failure stays explicit', () => {
@@ -35,5 +35,13 @@ test('hand vertical guidance uses forward and toward the body, while phone align
   const found = {...idle,running:true,found:true,centered:true,guiding:true};
   assert.equal(deriveScene({...found,direction:'up'}).title,'앞으로');
   assert.equal(deriveScene({...found,direction:'down'}).title,'몸 쪽으로');
-  assert.match(deriveScene({...found,centered:false,direction:'up'}).title,/폰을.*위쪽/);
+  assert.doesNotMatch(deriveScene({...found,centered:false,direction:'up'}).title,/위쪽|아래쪽/);
+});
+
+test('locked hand guidance ignores the center cell, but an unknown sharp handle blocks all hand directions',()=>{
+  const found={...idle,running:true,found:true,guiding:true,centered:false,handPhase:true,direction:'left' as const};
+  assert.equal(deriveScene(found).state,'guiding');
+  const waiting=deriveScene({...found,waitingHandle:true});
+  assert.equal(waiting.state,'found');assert.equal(waiting.title,'손잡이를 확인하고 있어요');assert.equal(waiting.direction,undefined);
+  assert.equal(deriveScene({...found,safety:'멈추세요. 칼날 쪽이에요.'}).state,'warning');
 });

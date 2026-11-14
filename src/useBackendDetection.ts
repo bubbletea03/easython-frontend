@@ -9,7 +9,8 @@ import { colorMismatchText, createColorNoticeGate } from './colorNotice';
 import { isPersonLabel } from './objectFilter';
 
 const aliases: Record<string,string> = {mug:'cup',tumbler:'cup','remote control':'remote','mobile phone':'cell phone',phone:'cell phone','water bottle':'bottle'};
-export function useBackendDetection(video: RefObject<HTMLVideoElement | null>, cameraReady: boolean, running: boolean, targets: string[], objectKo: string, revision: number) {
+export function useBackendDetection(video: RefObject<HTMLVideoElement | null>, cameraReady: boolean, running: boolean, targets: string[], objectKo: string, revision: number,paused=false) {
+  const pausedRef=useRef(paused);pausedRef.current=paused;
   const [ready, setReady] = useState(false);
   const [describeEnabled, setDescribeEnabled] = useState<boolean | undefined>();
   const [status, setStatus] = useState('백엔드 연결 확인 중');
@@ -67,17 +68,24 @@ export function useBackendDetection(video: RefObject<HTMLVideoElement | null>, c
     const controller = new AbortController();
     let frameController: AbortController | undefined;
     let tracks: DetectionTrack[] = [];
+    let pauseStarted:number|undefined;
+    const adjustPause=()=>{
+      const now=performance.now();
+      if(pausedRef.current){pauseStarted??=now;frameController?.abort();return;}
+      if(pauseStarted!==undefined){const gap=now-pauseStarted;pauseStarted=undefined;tracks=tracks.map(track=>({...track,lastSeen:track.lastSeen+gap}));setDetections(tracks);}
+    };
     let failures = 0;
     void (async () => {
       while (!controller.signal.aborted) {
+        adjustPause();
         const source = video.current;
         const start = performance.now();
-        if (!document.hidden && source && source.readyState >= 2 && !source.paused) {
+        if (!pausedRef.current && !document.hidden && source && source.readyState >= 2 && !source.paused) {
           frameController = new AbortController();
           try {
             const image = await captureFrame(source,frameController.signal);
             const response = await api.detect(image,targetKey ? targetKey.split(',') : [],frameController.signal);
-            if (controller.signal.aborted || frameController.signal.aborted || document.hidden) continue;
+            if (controller.signal.aborted || frameController.signal.aborted || document.hidden || pausedRef.current) continue;
             failures = 0;
             const results = response.detections.filter(d => !isPersonLabel(d.label) && !isPersonLabel(d.target));
             const items = results.filter(d => d.score >= .5).map(d => ({label:objectKo || labels[d.target] || labels[d.label] || d.label,
@@ -100,6 +108,7 @@ export function useBackendDetection(video: RefObject<HTMLVideoElement | null>, c
       }
     })();
     const expire = setInterval(() => {
+      adjustPause();if(pausedRef.current)return;
       const active = tracks.filter(t => performance.now()-t.lastSeen < 3000);
       if (active.length !== tracks.length) { tracks = active; setDetections(tracks); }
     },250);

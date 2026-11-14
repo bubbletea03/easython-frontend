@@ -10,33 +10,19 @@ import { useSearchCommands } from './useSearchCommands';
 import type { DetectionTrack } from './detectionTracks';
 import { CameraHUD, StartScreen } from './CameraHUD';
 import { deriveScene, screenDirection } from './sceneUI';
-import { unlockFeedback, listeningCue, guideCue, vibrate } from './audioFeedback';
+import { unlockFeedback, guideCue, phoneCue, stopFeedback, vibrate } from './audioFeedback';
 import { speak, cancelSpeech, isPrioritySpeaking, getSpeechLog, getPlaybackMode } from './speech';
-import { followHandlePoint } from './gripGeometry';
-import { createPhoneLossNoticeGate, handOccludesTarget, lostDirection, gridAlignment } from './phoneGuidance';
+import { followHandlePoint, bladeZone, createBladeWarningGate, SHARP_LABELS } from './gripGeometry';
+import { createPhoneLossNoticeGate, handOccludesTarget, lostDirection, createPhoneAlignmentGate, createGuidancePhase } from './phoneGuidance';
 import { useWakeLock } from './useWakeLock';
 import { foundRecordingId, findRecordingId, preloadRecordings } from './recordedSpeech';
 import { createTargetLock, createTargetChoiceGate } from './targetLock';
-import { useContinuousVoice } from './useContinuousVoice';
-
-type VoiceRecognition = {
-  lang: string;
-  continuous: boolean;
-  interimResults: boolean;
-  onresult: ((event: { results: ArrayLike<ArrayLike<{ transcript: string }> & { isFinal: boolean }> }) => void) | null;
-  onerror: ((event: { error: string }) => void) | null;
-  onend: (() => void) | null;
-  start(): void;
-  stop(): void;
-  abort(): void;
-};
+import { createPushToTalk, type PushRecognizer } from './pushToTalkCore';
 
 function App() {
   const [started, setStarted] = useState(false);
   const [cameraAttempt, setCameraAttempt] = useState(0);
   const cameraFailure = useRef<{text:string;clipId:string} | undefined>(undefined);
-  const voiceUnlocked = useRef(false);
-  const preparingVoice = useRef(false);
   const [cameraError, setCameraError] = useState(false);
   const [dev, setDev] = useState(() => location.hash === '#dev');
   const [now, setNow] = useState(() => performance.now());
@@ -46,12 +32,17 @@ function App() {
   const lastSearchHint = useRef(performance.now());
   const video = useRef<HTMLVideoElement>(null);
   const [status, setStatus] = useState('카메라를 준비하고 있습니다.');
-  const recognition = useRef<VoiceRecognition | null>(null);
-  const voiceStartTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const recognition = useRef<PushRecognizer | null>(null);
+  const voiceSession=useRef<ReturnType<typeof createPushToTalk>|undefined>(undefined);
+  const phaseGate=useRef(createGuidancePhase());
+  const alignmentGate=useRef(createPhoneAlignmentGate());
+  const bladeGate=useRef(createBladeWarningGate());
+  const [bladeWarning,setBladeWarning]=useState<string>();
+  const bladeSpeaking=useRef(false);
+  const handleHold=useRef<number|undefined>(undefined);
   const [listening, setListening] = useState(false);
   const [voiceMessage, setVoiceMessage] = useState('');
   const [voiceError, setVoiceError] = useState<string>();
-  const [handsFreeError,setHandsFreeError] = useState<string>();
   const [cameraReady, setCameraReady] = useState(false);
   useWakeLock(cameraReady);
   const [viewport, setViewport] = useState({ width: 1, height: 1 });
@@ -64,19 +55,13 @@ function App() {
   const descriptionCapability = useRef<boolean | undefined>(undefined);
   const autoDescribeEnabled = useRef(false);
   const position = useRef<{text:string;clipId?:string} | undefined>(undefined);
-  const search = useSearchCommands(video, selected, descriptionCapability, autoDescribeEnabled, position, chooseTarget);
+  const search = useSearchCommands(video, selected, descriptionCapability, autoDescribeEnabled, position, chooseTarget,()=>vibrate([80,60,80]));
   const { session } = search;
-  const voiceDiagnostics=useContinuousVoice(cameraReady && session.running && !listening,
-    text=>{
-      setVoiceMessage(text);
-      if (text==='그만') stop();
-      else void search.command(text);
-    },message=>setHandsFreeError(message),()=>setHandsFreeError(undefined));
-  const backend = useBackendDetection(video, cameraReady, session.running, session.targets, session.objectKo, session.revision);
+  const backend = useBackendDetection(video, cameraReady, session.running, session.targets, session.objectKo, session.revision,search.paused);
   descriptionCapability.current = backend.describeEnabled;
   const targeted = session.targets.length > 0;
-  autoDescribeEnabled.current = cameraReady && session.running && targeted && backend.active && !listening && !search.busy && !search.safety;
-  const local = useObjectDetection(video, cameraReady, { enabled: session.running || search.outcome==='done', objects: session.running && !backend.active,
+  autoDescribeEnabled.current = cameraReady && session.running && targeted && backend.active && !listening && !search.paused && !search.busy && !search.safety;
+  const local = useObjectDetection(video, cameraReady, { enabled: session.running, objects: session.running && !backend.active,
     targets: targeted ? session.targets : null });
   const detections = session.running ? (backend.active ? backend.detections : local.detections) : [];
   const { detectionMessage, hands, handMessage } = local;
@@ -89,7 +74,7 @@ function App() {
   chooseTarget.current = text => {
     const choice = targetChoices.current.answer(text,current);
     if (!choice) return false;
-    targetLock.current.choose(choice.target.item.id); setChoicePrompt(undefined); refreshChoice(value=>value+1);
+    targetLock.current.choose(choice.target.item.id);phaseGate.current.reset(); setChoicePrompt(undefined); refreshChoice(value=>value+1);
     speak(`${choice.side} 물건으로 안내할게요.`); return true;
   };
   selected.current = primary?.item;
@@ -106,33 +91,70 @@ function App() {
   const handlePoint = search.handlePoint && primary && (!primary.item.missing || now-primary.item.lastSeen < 2000) && search.handlePoint.targetId === primary.item.id
     ? followHandlePoint(search.handlePoint,primary.item) : undefined;
   const handPoint = nearestHand?.index;
-  const alignmentDirection = guideRect ? gridAlignment((guideRect.x+guideRect.width/2)/viewport.width, (guideRect.y+guideRect.height/2)/viewport.height) : undefined;
+  const cx=guideRect?(guideRect.x+guideRect.width/2)/viewport.width:.5;
+  const alignmentDirection = guideRect ? alignmentGate.current.update(cx,session.revision) : undefined;
   const centered = !!guideRect && !alignmentDirection;
-  const destination = handlePoint ? projectPoint(handlePoint, source, screen) : guideRect ? { x: guideRect.x + guideRect.width / 2, y: guideRect.y + guideRect.height / 2 } : undefined;
-  const direction = centered && handPoint && destination ? screenDirection(destination.x - handPoint.x, destination.y - handPoint.y)
-    : alignmentDirection;
+  const sharp=!!primary&&(SHARP_LABELS.has((primary.item.name||'').toLowerCase())||SHARP_LABELS.has(primary.item.label)||search.hazard?.targetId===primary.item.id&&search.hazard.kind==='sharp');
+  const waitingHandle=sharp&&!handlePoint;
+  const destination = handlePoint ? projectPoint(handlePoint, source, screen) : !sharp && guideRect ? { x: guideRect.x + guideRect.width / 2, y: guideRect.y + guideRect.height / 2 } : undefined;
   const foundVisible = !!primary && (!primary.item.missing || now-primary.item.lastSeen < 2000);
   const occluded = !foundVisible && handOccludesTarget(handPoint, destination, viewport);
   const missingFor = !foundVisible && lastSeen.current ? now-lastSeen.current.at : 0;
   const lost = targeted && session.running && !occluded && missingFor > 2000;
   const researching = lost && missingFor >= 10000;
   const lostSide = lostDirection(lastSeen.current?.x ?? .5);
-  const scene = deriveScene({ listening, busy: search.busy, running: session.running && targeted, cameraReady,
-    cameraError, message: cameraError ? status : voiceError || search.message, safety: search.safety, outcome: voiceError ? 'unknown' : search.outcome,
+  const phase=phaseGate.current.update({now,revision:session.revision,visible:foundVisible||occluded,lost,centered,handVisible:!!handPoint,cx,
+    enabled:session.running&&!search.paused&&!listening&&!search.busy&&!waitingHandle});
+  const handPhase=phase.phase==='hand'&&!waitingHandle;
+  const direction=handPhase&&handPoint&&destination?screenDirection(destination.x-handPoint.x,destination.y-handPoint.y):alignmentDirection;
+  const effectiveSafety=bladeWarning||search.safety;
+  const scene = deriveScene({ listening, busy: search.busy, running: session.running && targeted && !search.paused, cameraReady,
+    cameraError, message: cameraError ? status : voiceError || search.message, safety: effectiveSafety, outcome: voiceError ? 'unknown' : search.outcome,
     targetLabel: primary?.item.label || session.objectKo, found: foundVisible || occluded, lost: lost && !researching,
-    lostSide, guiding: centered && !!handPoint, centered,
+    lostSide, guiding: handPhase && !!handPoint, centered,handPhase,waitingHandle,
     direction, timedOut: now - searchStarted.current > 30000 });
-  const phoneText = alignmentDirection ? `폰을 조금 ${{left:'왼쪽',right:'오른쪽',up:'위쪽',down:'아래쪽'}[alignmentDirection]}으로 돌려주세요.` : '';
+  const phoneText = !handPhase&&alignmentDirection ? `폰을 조금 ${alignmentDirection==='left'?'왼쪽':'오른쪽'}으로 돌려주세요.` : '';
   position.current = foundVisible && primary ? {
     text: `화면 ${alignmentDirection ? {left:'왼쪽',right:'오른쪽',up:'위쪽',down:'아래쪽'}[alignmentDirection] : '가운데'}에 있어요.`,
     clipId: alignmentDirection === 'left' ? 'pos_left' : alignmentDirection === 'right' ? 'pos_right' : !alignmentDirection ? 'pos_center' : undefined,
   } : undefined;
   useSceneSpeech(targeted ? foundVisible ? primary!.item : occluded ? lastSeen.current?.item : undefined : undefined,
-    scene.state === 'guiding' ? `${scene.title}. ${scene.detail || ''}` : scene.state === 'found' ? phoneText : '', listening || search.busy || !!search.safety || !!choicePrompt,
-    session.revision, lost, centered ? '물건이 가운데에 있어요. 이제 손을 뻗어 주세요.' : undefined, scene.state === 'found', centered, scene.state === 'guiding' && !scene.direction,
+    scene.state === 'guiding' ? `${scene.title}. ${scene.detail || ''}` : scene.state === 'found' ? phoneText : '', listening || search.paused || search.busy || !!effectiveSafety || !!choicePrompt || waitingHandle,
+    session.revision, lost, undefined, !handPhase, handPhase, scene.state === 'guiding' && !scene.direction,
     scene.state === 'guiding' && scene.direction ? {left:'move_left',right:'move_right',up:'move_forward',down:'move_back'}[scene.direction]
       : scene.state === 'found' && alignmentDirection && ['left','right'].includes(alignmentDirection) ? `align_${alignmentDirection}` : undefined,
-    scene.state === 'guiding' && search.graspTip?.targetId === primary?.item.id ? search.graspTip?.text : undefined);
+    scene.state === 'guiding' && search.graspTip?.targetId === primary?.item.id ? search.graspTip?.text : undefined,phase.notice);
+
+  useEffect(()=>{
+    if(!session.running||search.paused||listening||search.busy||!foundVisible||!waitingHandle||document.hidden){
+      if(!waitingHandle)handleHold.current=undefined;return;
+    }
+    search.requestHandle();
+    if(handleHold.current!==primary?.item.id){
+      handleHold.current=primary?.item.id;
+      cancelSpeech();stopFeedback();
+      speak(backend.describeEnabled===false?'손잡이를 확인할 수 없어 손 안내를 멈췄어요. 손을 잠시 멈춰 주세요.':'손잡이를 확인하고 있어요. 손을 잠시 멈춰 주세요.',undefined,{priority:'safety',maxDurationMs:6000});
+    }
+  },[now,session.running,search.paused,listening,search.busy,foundVisible,waitingHandle,primary?.item.id,backend.describeEnabled]);
+  useEffect(()=>{
+    const zone=sharp&&guideRect&&destination&&handlePoint?bladeZone(guideRect,destination):undefined;
+    const fingers=hands.flatMap(hand=>[projectPoint(hand[4],source,screen),projectPoint(hand[8],source,screen)]);
+    const warning=bladeGate.current.update(primary?.item.id,zone,fingers,now,
+      session.running&&sharp&&foundVisible&&!search.paused&&!listening&&!document.hidden);
+    if(!warning.danger){
+      setBladeWarning(undefined);
+      if(bladeSpeaking.current){cancelSpeech();bladeSpeaking.current=false;}
+      return;
+    }
+    const finger=zone&&fingers.find(p=>p.x>=zone.x-zone.width*.1&&p.x<=zone.x+zone.width*1.1&&p.y>=zone.y-zone.height*.1&&p.y<=zone.y+zone.height*1.1);
+    const side=finger&&destination?screenDirection(destination.x-finger.x,destination.y-finger.y):undefined;
+    const text=`멈추세요. 칼날 쪽이에요. ${side?`손잡이는 ${{left:'왼쪽',right:'오른쪽',up:'앞쪽',down:'몸 쪽'}[side]}이에요.`:'손잡이 쪽으로 손을 옮겨 주세요.'}`;
+    setBladeWarning(previous=>previous===text?previous:text);
+    if(warning.announce&&!bladeSpeaking.current){
+      cancelSpeech();stopFeedback();bladeSpeaking.current=true;vibrate([400,150,400]);
+      speak(text,()=>{bladeSpeaking.current=false;},{priority:'safety',maxDurationMs:6000});
+    }
+  },[now,primary?.item.id,sharp,foundVisible,session.running,search.paused,listening]);
 
 
   useEffect(() => {
@@ -140,24 +162,24 @@ function App() {
     const hash = () => setDev(location.hash === '#dev'); window.addEventListener('hashchange', hash);
     return () => { clearInterval(timer); window.removeEventListener('hashchange', hash); };
   }, []);
-  useEffect(() => { lastSeen.current = undefined; lossNotices.current.reset(); searchStarted.current = performance.now(); lastSearchHint.current = performance.now(); setChoicePrompt(undefined); setHandsFreeError(undefined); }, [session.revision]);
+  useEffect(() => { lastSeen.current = undefined; lossNotices.current.reset(); searchStarted.current = performance.now(); lastSearchHint.current = performance.now(); setChoicePrompt(undefined);setBladeWarning(undefined); }, [session.revision]);
   useEffect(() => {
     const event = targetChoices.current.update(current,now,session.revision,
-      session.running && targeted && !listening && !search.busy && !search.safety && !document.hidden && !isPrioritySpeaking());
+      session.running && targeted && !search.paused && !listening && !search.busy && !effectiveSafety && !document.hidden && !isPrioritySpeaking());
     if (event?.type === 'ask') {
       const text = '같은 물건이 두 개 보여요. 왼쪽과 오른쪽 중 어느 쪽인가요?';
       setChoicePrompt(text);
       speak(text,()=>targetChoices.current.startDeadline(performance.now()));
     } else if (event?.type === 'choose') {
-      targetLock.current.choose(event.target.item.id); setChoicePrompt(undefined); refreshChoice(value=>value+1);
+      targetLock.current.choose(event.target.item.id);phaseGate.current.reset(); setChoicePrompt(undefined); refreshChoice(value=>value+1);
       speak(`${event.side} 물건으로 안내할게요.`);
     } else if (event?.type === 'dismiss') setChoicePrompt(undefined);
-  }, [now,session.revision,session.running,listening,search.busy,search.safety,targeted]);
+  }, [now,session.revision,session.running,search.paused,listening,search.busy,effectiveSafety,targeted]);
   useEffect(() => {
     if (primary && !primary.item.missing) lastSeen.current = { at: primary.item.lastSeen, x: (primary.rect.x + primary.rect.width / 2) / viewport.width, item: primary.item };
   }, [primary?.item.lastSeen, primary?.item.id]);
   useEffect(() => {
-    if (!targeted || choicePrompt || scene.state !== 'guiding' || !nearestHand) return;
+    if (!targeted || search.paused || listening || choicePrompt || scene.state !== 'guiding' || !direction || !nearestHand) return;
     let last = 0;
     const timer = setInterval(() => {
       if (document.hidden || isPrioritySpeaking() || window.speechSynthesis?.speaking || window.speechSynthesis?.pending) return;
@@ -166,21 +188,20 @@ function App() {
       if (timestamp - last >= interval) { guideCue(direction === 'left' ? -1 : direction === 'right' ? 1 : 0); last = timestamp; }
     }, 100);
     return () => clearInterval(timer);
-  }, [scene.state, direction, choicePrompt, Math.round((nearestHand?.distance ?? 0) * 10)]);
-  useEffect(() => { if (scene.state === 'done') vibrate([80,60,80]); }, [scene.state]);
+  }, [scene.state, direction, search.paused,listening, choicePrompt, Math.round((nearestHand?.distance ?? 0) * 10)]);
   useEffect(() => {
     const notice = lossNotices.current.update(missingFor, lostSide, now,
-      lost && !listening && !search.busy && !search.safety && !document.hidden && !isPrioritySpeaking(), foundVisible);
-    if (notice) speak(notice, undefined, {priority:'guidance',clipId:researching ? 'lost_research' : lostSide ? `lost_turn_${lostSide}` : 'turn_phone'});
-  }, [now, missingFor, lost, lostSide, foundVisible, listening, search.busy, search.safety]);
+      lost && !search.paused && !listening && !search.busy && !effectiveSafety && !document.hidden && !isPrioritySpeaking(), foundVisible);
+    if (notice) {phoneCue();speak(notice, undefined, {priority:'guidance',clipId:researching ? 'lost_research' : lostSide ? `lost_turn_${lostSide}` : 'turn_phone'});}
+  }, [now, missingFor, lost, lostSide, foundVisible, search.paused,listening, search.busy,effectiveSafety]);
   useEffect(() => {
-    if (!session.running || !targeted || listening || search.busy || search.safety || document.hidden || isPrioritySpeaking()) return;
+    if (!session.running || !targeted || search.paused || listening || search.busy || effectiveSafety || document.hidden || isPrioritySpeaking()) return;
     if (!occluded && now-(lastSeen.current?.at ?? searchStarted.current) >= 120000) { search.timeout(); return; }
     if (scene.state === 'searching' && !lastSeen.current && now-lastSearchHint.current >= 10000) {
       lastSearchHint.current = now;
       speak('아직 못 찾았어요. 계속 천천히 돌려 주세요.',undefined,{priority:'guidance',clipId:'search_hint'});
     }
-  }, [now,session.running,scene.state,listening,search.busy,search.safety,targeted,occluded]);
+  }, [now,session.running,scene.state,search.paused,listening,search.busy,effectiveSafety,targeted,occluded]);
   useEffect(()=>{if(voiceError)speak(voiceError);},[voiceError]);
   useEffect(() => {
     if (started && handMessage.includes('없어요')) speak('손 추적을 사용할 수 없어요. 페이지를 새로고침해 주세요.',undefined,{clipId:'fatal_hand'});
@@ -208,122 +229,46 @@ function App() {
     return () => observer.disconnect();
   }, [started]);
 
-  useEffect(() => () => {
-    clearTimeout(voiceStartTimer.current);
-    const current = recognition.current;
-    if (current) {
-      current.onresult = null;
-      current.onerror = null;
-      current.onend = null;
-      current.abort();
-      recognition.current = null;
-    }
-  }, []);
-
+  useEffect(()=>()=>voiceSession.current?.dispose(),[]);
   useEffect(()=>{
-    const hide=()=>{
-      if(!document.hidden)return;
-      clearTimeout(voiceStartTimer.current);voiceStartTimer.current=undefined;
-      const current=recognition.current;
-      if(current) {current.onend=current.onerror=current.onresult=null;current.abort();recognition.current=null;}
-      setListening(false);
-    };
+    const hide=()=>{if(document.hidden)voiceSession.current?.dispose();};
     document.addEventListener('visibilitychange',hide);
     return ()=>document.removeEventListener('visibilitychange',hide);
   },[]);
-
-  useEffect(() => {
-    clearTimeout(voiceStartTimer.current); voiceStartTimer.current=undefined;
-    const current = recognition.current;
-    if (current) {
-      current.onresult = current.onerror = current.onend = null;
-      current.abort(); recognition.current = null; setListening(false);
-    }
-  }, [session.revision]);
-
+  useEffect(()=>{voiceSession.current?.dispose();},[session.revision]);
   function toggleVoice() {
-    if (!listening && (session.running || search.busy)) { stop(); return; }
+    if (voiceSession.current) { voiceSession.current.stop(); return; }
     unlockFeedback();
+    const afterStop=session.running || search.busy || search.paused;
+    if(afterStop)search.pause();
+    cancelSpeech(); stopFeedback();
     if (!cameraReady) {
-      if (cameraError) { setCameraAttempt(value=>value+1); }
-      const failure = cameraFailure.current;
+      if (cameraError) setCameraAttempt(value=>value+1);
+      const failure=cameraFailure.current;
       speak(failure?.text || '아직 카메라를 준비하고 있어요. 잠시 기다려 주세요.',undefined,{clipId:failure?.clipId || 'not_ready'});
       return;
     }
-    search.cancelPending();
     setVoiceError(undefined);
-    cancelSpeech();
-    if (recognition.current) {
-      if(preparingVoice.current || voiceStartTimer.current!==undefined) {
-        preparingVoice.current=false;
-        clearTimeout(voiceStartTimer.current);voiceStartTimer.current=undefined;
-        recognition.current=null;setListening(false);
-      } else recognition.current.stop();
-      return;
-    }
-    const speechWindow = window as Window & {
-      SpeechRecognition?: new () => VoiceRecognition;
-      webkitSpeechRecognition?: new () => VoiceRecognition;
-    };
-    const Recognition = speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition;
-    if (!Recognition) {
-      setVoiceError('이 브라우저에서는 음성 인식을 지원하지 않습니다.');
-      return;
-    }
-    const current = new Recognition();
-    current.lang = 'ko-KR';
-    current.continuous = false;
-    current.interimResults = true;
-    let receivedResult = false;
-    let finalText = '';
-    let failed = false;
-    current.onresult = event => {
-      const text = Array.from(event.results, result => result[0].transcript).join(' ').trim();
-      if (text) {
-        receivedResult = true;
-        setVoiceMessage(text);
-      }
-      finalText = Array.from(event.results).filter(result => result.isFinal).map(result => result[0].transcript).join(' ').trim();
-    };
-    current.onerror = event => {
-      failed = true;
-      setVoiceError(event.error === 'not-allowed' || event.error === 'service-not-allowed'
+    const voiceWindow=window as Window & {SpeechRecognition?:new()=>PushRecognizer;webkitSpeechRecognition?:new()=>PushRecognizer};
+    const Recognition=voiceWindow.SpeechRecognition ?? voiceWindow.webkitSpeechRecognition;
+    if(!Recognition){if(afterStop)stop();else setVoiceError('이 브라우저에서는 음성 인식을 지원하지 않습니다.');return;}
+    const current=new Recognition();recognition.current=current;
+    const controller=createPushToTalk(current,{
+      afterStop,
+      onText:text=>setVoiceMessage(text),
+      onCommand:text=>{if(text==='그만')stop();else void search.command(text);},
+      onStopped:()=>stop(),
+      onError:code=>setVoiceError(code==='not-allowed'||code==='service-not-allowed'
         ? '마이크 권한을 허용한 뒤 다시 눌러 주세요.'
-        : event.error === 'no-speech'
-          ? '음성이 들리지 않았어요. 다시 눌러 말씀해 주세요.'
-          : '음성 인식을 사용할 수 없습니다. 마이크와 네트워크를 확인해 주세요.');
-    };
-    current.onend = () => {
-      recognition.current = null;
-      setListening(false);
-      listeningCue(false);
-      if (finalText && !failed && !document.hidden) void search.command(finalText);
-      if (!receivedResult && !failed) setVoiceError('음성이 들리지 않았어요. 다시 말씀해 주세요.');
-    };
-    recognition.current = current;
-    setListening(true); setVoiceMessage('');
-    const beginListening = () => {
-      preparingVoice.current = false;
-      if (recognition.current !== current || document.hidden) return;
-      listeningCue(true);
-    // The two cue tones finish after 190ms. Start recording after they stop.
-    voiceStartTimer.current=setTimeout(()=>{
-      voiceStartTimer.current=undefined;
-      if(recognition.current!==current)return;
-      if(document.hidden) {recognition.current=null;setListening(false);return;}
-      try {current.start();} catch {
-        recognition.current=null;setListening(false);setVoiceError('음성 인식을 시작하지 못했습니다. 다시 눌러 주세요.');
-      }
-    },250);
-    };
-    if (!voiceUnlocked.current) {
-      voiceUnlocked.current = true; preparingVoice.current = true;
-      speak('준비됐어요. 말씀해 주세요.', reason => {
-        if (reason !== 'cancelled') beginListening();
-      });
-    } else beginListening();
+        : code==='no-speech' ? '음성이 들리지 않았어요. 다시 눌러 말씀해 주세요.'
+        : '음성 인식을 사용할 수 없습니다. 마이크와 네트워크를 확인해 주세요.'),
+      onEnd:()=>{
+        if(recognition.current===current){recognition.current=null;voiceSession.current=undefined;setListening(false);if(!document.hidden)vibrate(20);}
+      },
+    });
+    voiceSession.current=controller;setListening(true);setVoiceMessage('');
+    controller.start();
   }
-
   useEffect(() => {
     if (!started) return;
     setCameraReady(false); setCameraError(false);
@@ -391,12 +336,10 @@ function App() {
 
 
   function stop() {
-    clearTimeout(voiceStartTimer.current); voiceStartTimer.current = undefined; preparingVoice.current = false;
-    const current = recognition.current;
-    if (current) {current.onend=current.onerror=current.onresult=null;current.abort();recognition.current=null;}
+    voiceSession.current?.dispose();voiceSession.current=undefined;recognition.current=null;stopFeedback();
     setListening(false); search.stop(); setVoiceMessage(''); setVoiceError(undefined);
   }
-  if (!started) return <StartScreen onStart={()=>{unlockFeedback();voiceUnlocked.current=true;search.start();setStarted(true);}} />;
+  if (!started) return <StartScreen onStart={()=>{unlockFeedback();search.start();setStarted(true);}} />;
   return <main className={`camera-screen scene-${scene.state}`}>
     <video ref={video} autoPlay muted playsInline aria-label="카메라 미리보기" />
     <div className="detection-overlay" aria-hidden="true">
@@ -414,12 +357,11 @@ function App() {
       </div>;
     })()}
     {targeted && !lost && <HandOverlay hands={hands} source={source} viewport={screen} />}
-    <CameraHUD scene={choicePrompt && !search.safety ? {...scene,title:choicePrompt,detail:'왼쪽 또는 오른쪽이라고 말씀해 주세요.',direction:undefined} : scene} heard={voiceMessage} active={session.running} pending={search.busy} onVoice={toggleVoice} onStop={stop} />
-    {handsFreeError && <p className="handsfree-error" role="status">{handsFreeError}</p>}
+    <CameraHUD scene={choicePrompt && !effectiveSafety ? {...scene,title:choicePrompt,detail:'버튼을 누르고 왼쪽 또는 오른쪽이라고 말씀해 주세요.',direction:undefined} : scene} heard={voiceMessage} active={session.running&&!search.paused} pending={search.busy} onVoice={toggleVoice} />
     {dev && <aside className="dev-panel" aria-label="개발 정보">
       <b>개발 정보</b>
       <p>{backend.status}</p><p>{handMessage}</p><p>{detectionMessage}</p>
-      <p>계속 듣기: {voiceDiagnostics.state} · 인식: {voiceDiagnostics.transcript || '없음'}</p>
+      <p>음성 입력: {listening?'한 번 듣는 중':'꺼짐'} · 인식: {voiceMessage || '없음'}</p>
       <p>안내 재생: {getPlaybackMode()}</p>
       <p>{primary ? `${primary.item.label} · 신뢰도 ${Math.round(primary.item.score * 100)}%` : '탐지 없음'}</p>
       {primary && <p>실제 이름: {primary.item.name || '로컬 탐지'} · 정확 일치: {primary.item.exact ? '예' : '아니요'}</p>}
