@@ -1,5 +1,6 @@
 # 손길 · 프론트엔드
 
+<<<<<<< HEAD
 **음성으로 물건을 찾고, 화면·음성·진동으로 손의 이동 방향을 안내받는 모바일 웹 앱입니다.**
 
 카메라 영상에서 찾을 물체와 손을 추적하고, 폰 방향 맞추기부터 손 뻗기까지 단계별로 안내합니다. React 19 · TypeScript · Vite로 구현했으며, 물체 탐지·명령 해석·설명·TTS를 제공하는 외부 백엔드 API와 연결합니다.
@@ -90,3 +91,13 @@ npm.cmd run preview -- --mode https --port 4173
 [API 연동·설정·검증 상세](docs/backend-integration.md) · [API 계약](docs/api.md) · [로컬 MediaPipe](docs/frontend-detection.md)
 
 자동 TTS는 브라우저 정책에 따라 사용자 조작이 필요할 수 있습니다. 실제 거리·접촉은 측정하지 않습니다. 사진은 긴 변 640px·JPEG 품질 0.7로 전송하며, 명령 해석·설명은 백엔드에서 외부 모델을 사용할 수 있습니다.
+=======
+React 19 · TypeScript · Vite 기반 모바일 카메라 웹 앱
+
+
+
+- 물체 탐지는 백엔드 YOLOE API를 우선 사용
+- 백엔드 연결 실패 시 브라우저의 Google MediaPipe 기술로 대체
+- 손 추적은 브라우저에서 처리
+- 음성은 고정 녹음 → 서버 TTS → 브라우저 음성
+>>>>>>> e3bb092e53a4e9623fd86498937e4cffef3320e7
