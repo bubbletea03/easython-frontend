@@ -22,6 +22,7 @@ export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, sel
   const autoGrip = useRef(createAutoGripGate());
   const refreshReady = useRef(false);
   const nextRefreshAt = useRef(Infinity);
+  const warned = useRef(new Set<string>());
   const alive = useRef(true);
   const notify = (text: string, onFinish?: () => void) => { setMessage(text); speak(text, onFinish); };
   function cancel(stopSpeech = true) {
@@ -79,16 +80,19 @@ export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, sel
       if (!alive.current || document.hidden || request.signal.aborted || generation.current !== token || selected.current?.id !== item.id || selected.current.missing) return;
       const relative = result.handlePoint && relativeHandlePoint(followHandlePoint({u:result.handlePoint.x,v:result.handlePoint.y},region), item);
       if (relative) { setHandlePoint({ ...relative, targetId: item.id }); handleTarget.current = item.id; }
-      if (refresh) return;
-      setSafety(result.safety);
-      if (result.safety) {
+      const warningKey = result.hazard || result.safety;
+      if (result.safety && warningKey && (!automatic || !warned.current.has(warningKey))) {
+        warned.current.add(warningKey);
+        setSafety(result.safety);
         setMessage(result.safety);
         speak(result.safety, () => {
           if (alive.current && generation.current === token) setSafety(undefined);
         }, {priority:'safety',maxDurationMs:5000});
-        const rest=(automatic ? [result.grasp].filter((text): text is string => !!text) : result.sentences).filter(sentence=>sentence!==result.safety).join(' ');
-        if(rest) speak(rest);
-      } else notify((automatic ? result.grasp : result.sentences.join(' ')) || '이 사진에서는 잡는 방법을 확인할 수 없어요.');
+      }
+      if (refresh) return;
+      const rest = (automatic ? [result.grasp].filter((text): text is string => !!text) : result.sentences).filter(sentence=>sentence!==result.safety).join(' ');
+      if (rest) notify(rest);
+      else if (!result.safety) notify('이 사진에서는 잡는 방법을 확인할 수 없어요.');
     } catch (error) {
       if (!refresh && !request.signal.aborted && generation.current === token && alive.current) notify(error instanceof Error ? error.message : '설명을 가져오지 못했습니다.');
     } finally {
@@ -101,6 +105,7 @@ export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, sel
   }
   useEffect(() => {
     autoGrip.current.reset(); refreshReady.current = false; nextRefreshAt.current = Infinity;
+    warned.current.clear();
   }, [session.revision]);
   useEffect(() => {
     const timer = setInterval(() => {

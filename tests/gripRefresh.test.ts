@@ -43,8 +43,17 @@ test('grip coordinates refresh repeatedly without hiding the point or repeating 
     await new Promise(resolve=>setImmediate(resolve));
     assert.deepEqual(states[5],{u:.7,v:.8,targetId:1});assert.deepEqual(spoken,['Hold here']);
     await tick(9500);assert.equal(calls,3);
+    resolveRefresh?.({sentences:['Sharp edge'],hazard:'sharp',safety:'Sharp edge',handlePoint:{x:.6,y:.7}});
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(states[2],'Sharp edge');
+    assert.deepEqual(spoken,['Hold here','Sharp edge']);
+    await tick(12500);assert.equal(calls,4);
+    resolveRefresh?.({sentences:[],hazard:'sharp',safety:'Same hazard, different wording',handlePoint:{x:.5,y:.6}});
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.deepEqual(spoken,['Hold here','Sharp edge']);
+    await tick(15500);assert.equal(calls,5);
     selected.current.missing=true;
-    await tick(9600);
+    await tick(15600);
     resolveRefresh?.({sentences:[],handlePoint:{x:.1,y:.1}});
     await new Promise(resolve=>setImmediate(resolve));
     assert.equal(states[5],undefined);

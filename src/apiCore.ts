@@ -3,7 +3,7 @@ export type ApiStats = { window_sec: number; queue_length: number } & Record<str
 export type ServerDetection = { label: string; target: string; score: number; box: { x: number; y: number; w: number; h: number } };
 export type DetectResult = { detections: ServerDetection[]; mode?: string; color_filter?: unknown; color_rejected?: unknown };
 export type ParseResult = { intent: 'find' | 'where' | 'how' | 'stop' | 'unknown'; object_ko: string | null; targets: string[] };
-export type Description = { sentences: string[]; grasp?: string; safety?: string; handlePoint?: { x: number; y: number } };
+export type Description = { sentences: string[]; grasp?: string; hazard?: string; safety?: string; handlePoint?: { x: number; y: number } };
 export const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const unit = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1;
 
@@ -123,12 +123,22 @@ export function readDescription(result: unknown): Description {
   }
   if (!record(result)) return { sentences: [] };
   if (result.confidence === 'low') return { sentences: ['물건을 확실하게 확인하지 못했어요. 카메라를 가까이 비추고 다시 시도해 주세요.'] };
-  const hazard = typeof result.hazard === 'string' && ['hot', 'spill', 'edge', 'broken', 'sharp'].includes(result.hazard);
-  const safety = hazard && typeof result.safety === 'string' ? result.safety.trim() : '';
+  const warnings: Record<string, string> = {
+    hot:'뜨거울 수 있어요. 화상에 주의해 주세요.', spill:'내용물이 쏟아질 수 있어요. 조심해 주세요.',
+    edge:'물건이 가장자리에 있어요. 떨어지지 않게 주의해 주세요.',
+    broken:'깨진 부분이 있어요. 손을 다치지 않게 주의해 주세요.', sharp:'날카로운 부분에 손이 베이지 않게 주의해 주세요.',
+  };
+  const hazard = typeof result.hazard === 'string' && Object.hasOwn(warnings, result.hazard) ? result.hazard : undefined;
+  const rawSafety = typeof result.safety === 'string' ? result.safety.trim() : '';
+  // Compatibility with servers that return safety without a hazard field.
+  const legacySafety = !Object.hasOwn(result, 'hazard')
+    && /뜨거|화상|김이|끓|쏟|넘칠|가장자리|깨진|깨져|날카|칼날|베일/.test(rawSafety)
+    && !/액정|화면|충전|뜨겁지|안전해|안전합니다|위험하지/.test(rawSafety);
+  const safety = hazard ? rawSafety || warnings[hazard] : legacySafety ? rawSafety : '';
   const grasp = typeof result.grasp === 'string' ? result.grasp.trim() : '';
   const comment = typeof result.comment === 'string' ? result.comment.trim() : '';
   const sentences = [safety, grasp, comment].filter(Boolean);
   const point = result.handle_point;
-  return { sentences, ...(safety ? { safety } : {}), ...(grasp ? { grasp } : {}),
+  return { sentences, ...(hazard ? { hazard } : {}), ...(safety ? { safety } : {}), ...(grasp ? { grasp } : {}),
     ...(record(point) && unit(point.x) && unit(point.y) ? { handlePoint: { x: point.x, y: point.y } } : {}) };
 }

@@ -22,3 +22,14 @@ test('automatic explanation stays consumed across track changes until session re
   gate.reset();
   for (let t=9000;t<=12000;t+=1000) assert.equal(gate.update(item(2,t),t,true),t===12000);
 });
+
+test('legacy explicit risk warnings survive missing hazard metadata; generic advice stays silent', () => {
+  for (const safety of ['뜨거운 김이 나니 화상에 주의해 주세요.', '날카로운 칼날에 주의해 주세요.', '깨진 부분을 만지지 마세요.']) {
+    assert.equal(readDescription({safety}).safety,safety);
+  }
+  for (const safety of ['액정이 깨지지 않게 조심하세요.', '충전 중이에요.', '뜨겁지 않아요. 안전해요.']) {
+    assert.equal(readDescription({safety}).safety,undefined);
+  }
+  assert.equal(readDescription({hazard:null,safety:'뜨거워요.'}).safety,undefined);
+  assert.match(readDescription({hazard:'hot',safety:null}).safety!,/화상/);
+});
