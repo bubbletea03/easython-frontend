@@ -73,7 +73,7 @@ export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, sel
   useEffect(() => {
     const timer = setInterval(() => {
       const item = selected.current;
-      if (describeTarget.current !== undefined && (!item || item.missing || item.id !== describeTarget.current)) cancel();
+      if (describeTarget.current !== undefined && (!item || item.missing || item.id !== describeTarget.current || performance.now() - item.lastSeen > 2000)) cancel();
       const enabled = autoDescribeEnabled.current && describeEnabled.current === true && !document.hidden;
       if (autoGrip.current.update(item, performance.now(), enabled) && !describeLock.current) void describe();
     }, 100);

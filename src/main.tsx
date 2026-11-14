@@ -264,7 +264,9 @@ function App() {
     <video ref={video} autoPlay muted playsInline aria-label="카메라 미리보기" />
     <button className="camera-tap-zone" type="button" tabIndex={-1} aria-hidden="true" disabled={search.busy} onClick={toggleVoice} />
     <div className="detection-overlay" aria-hidden="true">
+      {current.filter(({ item }) => item.id !== primary?.item.id).map(({ item, rect }) => <div key={item.id} className="detection-box detection-secondary" style={{ left: rect.x, top: rect.y, width: rect.width, height: rect.height }} />)}
       {primary && !lost && <div key={primary.item.id} className={`detection-box${primary.item.missing ? ' is-missing' : ''}`} style={{ left: primary.rect.x, top: primary.rect.y, width: primary.rect.width, height: primary.rect.height }}>
+        <i className="box-corner top-left" /><i className="box-corner top-right" /><i className="box-corner bottom-left" /><i className="box-corner bottom-right" />
         <span className="detection-label">{primary.item.label}</span>
       </div>}
     </div>
