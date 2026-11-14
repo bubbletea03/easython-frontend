@@ -13,6 +13,7 @@ import { deriveScene, screenDirection } from './sceneUI';
 import { unlockFeedback, listeningCue, guideCue, vibrate } from './audioFeedback';
 import { speak, cancelSpeech, isPrioritySpeaking } from './speech';
 import { followHandlePoint, createGripSuccessGate } from './gripGeometry';
+import { createPhoneLossNoticeGate, handOccludesTarget, lostDirection, phoneEdgeDirection } from './phoneGuidance';
 
 type VoiceRecognition = {
   lang: string;
@@ -32,7 +33,8 @@ function App() {
   const [cameraError, setCameraError] = useState(false);
   const [dev, setDev] = useState(() => location.hash === '#dev');
   const [now, setNow] = useState(() => performance.now());
-  const lastSeen = useRef<{ at: number; x: number } | undefined>(undefined);
+  const lastSeen = useRef<{ at: number; x: number; item: DetectionTrack } | undefined>(undefined);
+  const lossNotices = useRef(createPhoneLossNoticeGate());
   const searchStarted = useRef(performance.now());
   const video = useRef<HTMLVideoElement>(null);
   const [status, setStatus] = useState('카메라를 준비하고 있습니다.');
@@ -65,10 +67,11 @@ function App() {
   const current = visible.filter(({ item }) => !item.missing);
   const primary = (current.length ? current : visible).sort((a,b) => b.rect.width * b.rect.height - a.rect.width * a.rect.height)[0];
   selected.current = primary?.item;
-  const nearestHand = primary && !primary.item.missing ? hands.map(hand => {
+  const guideRect = primary?.rect ?? (lastSeen.current ? projectBox(lastSeen.current.item, source, screen) : undefined);
+  const nearestHand = guideRect ? hands.map(hand => {
     const thumb = projectPoint(hand[4], source, screen);
     const index = projectPoint(hand[8], source, screen);
-    return { thumb, index, distance: fingerGuidance({ x: (thumb.x + index.x) / 2, y: (thumb.y + index.y) / 2 }, primary.rect, screen).fraction };
+    return { thumb, index, distance: fingerGuidance({ x: (thumb.x + index.x) / 2, y: (thumb.y + index.y) / 2 }, guideRect, screen).fraction };
   }).filter(({thumb,index}) => [thumb,index].every(p => p.x >= 0 && p.x <= viewport.width && p.y >= 0 && p.y <= viewport.height))
     .sort((a,b) => a.distance - b.distance)[0] : undefined;
   const guidance = primary && nearestHand
@@ -77,18 +80,27 @@ function App() {
   const handlePoint = search.handlePoint && primary && !primary.item.missing && search.handlePoint.targetId === primary.item.id
     ? followHandlePoint(search.handlePoint,primary.item) : undefined;
   const handPoint = nearestHand?.index;
-  const destination = handlePoint ? projectPoint(handlePoint, source, screen) : primary ? { x: primary.rect.x + primary.rect.width / 2, y: primary.rect.y + primary.rect.height / 2 } : undefined;
+  const destination = handlePoint ? projectPoint(handlePoint, source, screen) : guideRect ? { x: guideRect.x + guideRect.width / 2, y: guideRect.y + guideRect.height / 2 } : undefined;
   const aimOffset = primary ? primary.rect.x + primary.rect.width / 2 - viewport.width / 2 : 0;
   const direction = handPoint && destination ? screenDirection(destination.x - handPoint.x, destination.y - handPoint.y)
     : screenDirection(Math.abs(aimOffset) > viewport.width * .1 ? aimOffset : 0, 0);
-  const lost = targeted && session.running && !!lastSeen.current && now - lastSeen.current.at > 2000 && (!primary || primary.item.missing);
+  const foundVisible = !!primary && !primary.item.missing;
+  const occluded = !foundVisible && handOccludesTarget(handPoint, destination, viewport);
+  const missingFor = !foundVisible && lastSeen.current ? now-lastSeen.current.at : 0;
+  const lost = targeted && session.running && !occluded && missingFor > 2000;
+  const researching = lost && missingFor >= 10000;
+  const lostSide = lostDirection(lastSeen.current?.x ?? .5);
+  const edgeDirection = phoneEdgeDirection(primary ? (primary.rect.x + primary.rect.width/2)/viewport.width : .5);
   const scene = deriveScene({ listening, busy: search.busy, running: session.running && targeted, cameraReady,
     cameraError, message: cameraError ? status : voiceError || search.message, safety: search.safety, outcome: voiceError ? 'unknown' : search.outcome,
-    targetLabel: primary?.item.label || session.objectKo, found: !!primary && !primary.item.missing, lost,
-    lostSide: lastSeen.current && lastSeen.current.x < .5 ? 'left' : 'right', guiding: !!handPoint,
+    targetLabel: primary?.item.label || session.objectKo, found: foundVisible || occluded, lost: lost && !researching,
+    lostSide, guiding: !!handPoint,
     direction, timedOut: now - searchStarted.current > 30000 });
-  useSceneSpeech(targeted && primary && !primary.item.missing ? primary.item : undefined,
-    scene.state === 'guiding' || scene.state === 'found' ? scene.title : '', listening || search.busy || !!search.safety, session.revision, lost, scene.state === 'found' ? scene.detail : undefined);
+  const phoneText = edgeDirection ? `폰을 조금 ${edgeDirection === 'left' ? '왼쪽' : '오른쪽'}으로 돌려주세요.` : '';
+  const foundPosition = aimOffset < -viewport.width*.1 ? '화면 왼쪽에 있어요.' : aimOffset > viewport.width*.1 ? '화면 오른쪽에 있어요.' : '화면 정면에 있어요.';
+  useSceneSpeech(targeted ? foundVisible ? primary!.item : occluded ? lastSeen.current?.item : undefined : undefined,
+    scene.state === 'guiding' ? scene.title : scene.state === 'found' ? phoneText : '', listening || search.busy || !!search.safety,
+    session.revision, lost, `${foundPosition} 손을 화면 앞으로 넣어 주세요.`, scene.state === 'found');
 
   useEffect(() => {
     if(gripSuccess.current.update(primary?.item.id, primary?.rect, nearestHand, now,
@@ -107,9 +119,9 @@ function App() {
     const hash = () => setDev(location.hash === '#dev'); window.addEventListener('hashchange', hash);
     return () => { clearInterval(timer); window.removeEventListener('hashchange', hash); };
   }, []);
-  useEffect(() => { lastSeen.current = undefined; searchStarted.current = performance.now(); }, [session.revision]);
+  useEffect(() => { lastSeen.current = undefined; lossNotices.current.reset(); searchStarted.current = performance.now(); }, [session.revision]);
   useEffect(() => {
-    if (primary && !primary.item.missing) lastSeen.current = { at: primary.item.lastSeen, x: (primary.rect.x + primary.rect.width / 2) / viewport.width };
+    if (primary && !primary.item.missing) lastSeen.current = { at: primary.item.lastSeen, x: (primary.rect.x + primary.rect.width / 2) / viewport.width, item: primary.item };
   }, [primary?.item.lastSeen, primary?.item.id]);
   useEffect(() => {
     if (!targeted || scene.state !== 'guiding' || !nearestHand) return;
@@ -125,10 +137,13 @@ function App() {
   useEffect(() => { if (scene.state === 'done') vibrate([80,60,80]); }, [scene.state]);
   const searchTimedOut = scene.state === 'searching' && now - searchStarted.current > 30000;
   useEffect(() => {
-    if (scene.state === 'lost' || searchTimedOut) {
-      speak(`${scene.title}. ${scene.detail || ''}`,undefined,{clipId:scene.state==='lost' ? `lost_turn_${scene.lostSide}` : 'search_timeout'});
-    }
-  }, [scene.state, searchTimedOut]);
+    const notice = lossNotices.current.update(missingFor, lostSide, now,
+      lost && !listening && !search.busy && !search.safety && !document.hidden && !isPrioritySpeaking(), foundVisible);
+    if (notice) speak(notice, undefined, {priority:'guidance'});
+  }, [now, missingFor, lost, lostSide, foundVisible, listening, search.busy, search.safety]);
+  useEffect(() => {
+    if (searchTimedOut && !researching) speak(`${scene.title}. ${scene.detail || ''}`,undefined,{clipId:'search_timeout'});
+  }, [searchTimedOut]);
   useEffect(()=>{if(voiceError)speak(voiceError);},[voiceError]);
 
   useEffect(() => {
