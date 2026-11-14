@@ -43,10 +43,12 @@ function App() {
   const [viewport, setViewport] = useState({ width: 1, height: 1 });
   const selected = useRef<DetectionTrack | undefined>(undefined);
   const descriptionCapability = useRef<boolean | undefined>(undefined);
-  const search = useSearchCommands(video, selected, descriptionCapability);
+  const autoDescribeEnabled = useRef(false);
+  const search = useSearchCommands(video, selected, descriptionCapability, autoDescribeEnabled);
   const { session } = search;
   const backend = useBackendDetection(video, cameraReady, session.running, session.targets, session.objectKo, session.revision);
   descriptionCapability.current = backend.describeEnabled;
+  autoDescribeEnabled.current = cameraReady && session.running && backend.active && !listening && !search.busy;
   const local = useObjectDetection(video, cameraReady, { enabled: session.running, objects: !backend.active,
     targets: session.objectKo || session.targets !== DEFAULT_TARGETS ? session.targets : null,
     personSelected: selected.current?.label === '사람' });

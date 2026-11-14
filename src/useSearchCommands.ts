@@ -3,8 +3,9 @@ import { api, DEFAULT_TARGETS } from './api';
 import { captureFrame } from './capture';
 import { speak, cancelSpeech } from './speech';
 import type { DetectionTrack } from './detectionTracks';
+import { createAutoGripGate } from './autoGrip';
 
-export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, selected: RefObject<DetectionTrack | undefined>, describeEnabled: RefObject<boolean | undefined>) {
+export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, selected: RefObject<DetectionTrack | undefined>, describeEnabled: RefObject<boolean | undefined>, autoDescribeEnabled: RefObject<boolean>) {
   const [session, setSession] = useState({ running: false, targets: DEFAULT_TARGETS, objectKo: '', revision: 0 });
   const [outcome, setOutcome] = useState<'idle' | 'searching' | 'unknown' | 'done'>('idle');
   const [safety, setSafety] = useState<string>();
@@ -14,11 +15,13 @@ export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, sel
   const controller = useRef<AbortController | undefined>(undefined);
   const generation = useRef(0);
   const describeLock = useRef(false);
+  const describeTarget = useRef<number | undefined>(undefined);
+  const autoGrip = useRef(createAutoGripGate());
   const alive = useRef(true);
   const notify = (text: string) => { setMessage(text); speak(text); };
   function cancel() {
     generation.current++; controller.current?.abort(); controller.current = undefined;
-    describeLock.current = false; setBusy(false); setHandlePoint(undefined); setSafety(undefined); cancelSpeech();
+    describeLock.current = false; describeTarget.current = undefined; setBusy(false); setHandlePoint(undefined); setSafety(undefined); cancelSpeech();
   }
   function stop() {
     cancel(); setOutcome('idle'); setSession(s => ({ ...s, running: false, revision: s.revision + 1 })); notify('탐색과 안내를 중지했습니다.');
@@ -46,6 +49,8 @@ export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, sel
     if (!item || item.missing) { notify('먼저 물체를 카메라에 비춰 주세요.'); return; }
     if (describeEnabled.current === false) { notify('서버의 설명 기능이 비활성화되어 있습니다. 물체 탐지는 계속합니다.'); return; }
     cancel(); describeLock.current = true;
+    describeTarget.current = item.id;
+    autoGrip.current.mark(item.id);
     const token = generation.current;
     const request = new AbortController(); controller.current = request;
     setBusy(true); setMessage('잡는 방법을 확인하고 있어요.');
@@ -54,16 +59,26 @@ export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, sel
       const image = await captureFrame(video.current, request.signal);
       const prompt = `사진 속 ${item.label}의 잡는 방법을 한국어로 안내하세요. 대상 박스는 전체 이미지 기준 정규화 좌표 x=${item.x}, y=${item.y}, w=${item.width}, h=${item.height}입니다. 컵이라고 가정하지 마세요. JSON 객체로 object, direction, handle_point, safety, grasp, comment, confidence를 반환하세요. handle_point는 전체 이미지 기준 0~1의 x,y 좌표이며 잡을 부위를 확신하지 못하면 null로 하세요. safety는 주의 사항이 있을 때만 문장으로, 없으면 null로 하세요. 실제 접촉이나 잡기 성공을 단정하지 마세요.`;
       const result = await api.describe(image, prompt, request.signal);
-      if (!alive.current || request.signal.aborted || generation.current !== token || selected.current?.id !== item.id || selected.current.missing) return;
+      if (!alive.current || document.hidden || request.signal.aborted || generation.current !== token || selected.current?.id !== item.id || selected.current.missing) return;
       if (result.handlePoint) setHandlePoint({ ...result.handlePoint, targetId: item.id });
       setSafety(result.safety);
       notify(result.sentences.join(' ') || '이 사진에서는 잡는 방법을 확인할 수 없어요.');
     } catch (error) {
       if (!request.signal.aborted && generation.current === token && alive.current) notify(error instanceof Error ? error.message : '설명을 가져오지 못했습니다.');
     } finally {
-      if (generation.current === token && alive.current) { describeLock.current = false; setBusy(false); }
+      if (generation.current === token && alive.current) { describeLock.current = false; describeTarget.current = undefined; setBusy(false); }
     }
   }
+  useEffect(() => { autoGrip.current.reset(); }, [session.revision]);
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const item = selected.current;
+      if (describeTarget.current !== undefined && (!item || item.missing || item.id !== describeTarget.current)) cancel();
+      const enabled = autoDescribeEnabled.current && describeEnabled.current === true && !document.hidden;
+      if (autoGrip.current.update(item, performance.now(), enabled) && !describeLock.current) void describe();
+    }, 100);
+    return () => clearInterval(timer);
+  }, []);
   async function command(text: string) {
     const trimmed = text.trim();
     if (!trimmed) return;
