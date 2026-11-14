@@ -1,18 +1,23 @@
+import type { BlobPlayback, PrepareBlobPlayback } from './webAudioPlayback';
+
 export type SpeechEndReason = 'ended' | 'cancelled' | 'error' | 'timeout';
 export type SpeechOptions = {priority?: 'guidance' | 'normal' | 'found' | 'safety'; clipId?:string; maxDurationMs?:number; quietAfterMs?:number};
 type Job = {text:string; onFinish?: (reason:SpeechEndReason)=>void; options:SpeechOptions};
 export type SpeechLogEntry = {at:number;text:string;reason:SpeechEndReason;priority:number;caller?:string};
 const speechPriority = (options: SpeechOptions) => options.priority === 'safety' ? 3 : options.priority === 'found' ? 2 : options.priority === 'guidance' ? 0 : 1;
 
-export function createSpeechPlayer(tts: (text: string, signal: AbortSignal) => Promise<Blob>, recording?: (text:string, id:string|undefined, signal:AbortSignal)=>Promise<Blob|undefined>) {
+export function createSpeechPlayer(tts: (text: string, signal: AbortSignal) => Promise<Blob>, recording?: (text:string, id:string|undefined, signal:AbortSignal)=>Promise<Blob|undefined>, preparePlayback?:PrepareBlobPlayback) {
   let priorityUntil = 0;
   let generation = 0;
   let controller: AbortController | undefined;
   let audio: HTMLAudioElement | undefined;
   let audioUrl: string | undefined;
+  let bufferPlayback:BlobPlayback|undefined;
   let serverEnabled = false;
   let completion: ((reason: SpeechEndReason) => void) | undefined;
   let watchdog: ReturnType<typeof setTimeout> | undefined;
+  let startWatchdog: ReturnType<typeof setTimeout> | undefined;
+  let browserUtterance: SpeechSynthesisUtterance | undefined;
   let activePriority = -1;
   let queue: Job[] = [];
   let quietUntil = 0;
@@ -37,13 +42,19 @@ export function createSpeechPlayer(tts: (text: string, signal: AbortSignal) => P
     generation++;
     const done = completion; completion = undefined;
     clearTimeout(watchdog); watchdog = undefined;
+    clearTimeout(startWatchdog); startWatchdog = undefined;
     controller?.abort(); controller = undefined;
+    bufferPlayback?.stop();bufferPlayback=undefined;
     if (audio) {
-      audio.onended = audio.onerror = null;
+      audio.onended = audio.onerror = audio.onpause = audio.onplaying = null;
       audio.pause(); audio.removeAttribute('src'); audio.load(); audio = undefined;
     }
     if (audioUrl) { URL.revokeObjectURL(audioUrl); audioUrl = undefined; }
-    window.speechSynthesis?.cancel(); priorityUntil = 0; activePriority = -1;
+    if (browserUtterance) {
+      browserUtterance.onstart=browserUtterance.onend=browserUtterance.onerror=null;browserUtterance=undefined;
+      window.speechSynthesis?.cancel();
+    }
+    priorityUntil = 0; activePriority = -1;
     done?.(reason);
   }
   function cancelSpeech(reason: SpeechEndReason = 'cancelled') {
@@ -70,19 +81,29 @@ export function createSpeechPlayer(tts: (text: string, signal: AbortSignal) => P
       resumeQueue();
     };
     watchdog = setTimeout(() => finish('timeout'), duration);
+    const waitForPlayback = () => {
+      clearTimeout(startWatchdog);
+      startWatchdog = setTimeout(()=>finish('timeout'),4000);
+    };
+    const playbackStarted = () => {if(token!==generation)return;clearTimeout(startWatchdog);startWatchdog=undefined;};
     let usingFallback = false;
     const fallback = () => {
       if (token !== generation) return;
       if (document.hidden) { finish('cancelled'); return; }
       if (usingFallback) return;
       usingFallback = true;
-      if(audio) {audio.onended=audio.onerror=null;audio.pause();}
+      bufferPlayback?.stop();bufferPlayback=undefined;
+      if(audio) {audio.onended=audio.onerror=audio.onpause=audio.onplaying=null;audio.pause();}
       if (!window.speechSynthesis) { finish('error'); return; }
       try {
         const utterance = new SpeechSynthesisUtterance(text);
+        browserUtterance = utterance;
         utterance.lang = 'ko-KR'; utterance.rate = 1;
         utterance.onend = () => finish('ended');
         utterance.onerror = () => finish('error');
+        utterance.onstart = playbackStarted;
+        waitForPlayback();
+        window.speechSynthesis.resume?.();
         window.speechSynthesis.speak(utterance);
       } catch { finish('error'); }
     };
@@ -109,9 +130,28 @@ export function createSpeechPlayer(tts: (text: string, signal: AbortSignal) => P
       if (!blob) return;
       if (token !== generation || request.signal.aborted) return;
       if (document.hidden) { finish('cancelled'); return; }
+      if (preparePlayback) {
+        waitForPlayback();
+        try {
+          const playback=await preparePlayback(blob,request.signal,()=>finish('ended'),fallback);
+          if(token!==generation || request.signal.aborted){playback.stop();return;}
+          bufferPlayback=playback;
+          await playback.start();
+          if(token===generation)playbackStarted();
+          return;
+        } catch {
+          if(token!==generation || request.signal.aborted)return;
+          bufferPlayback?.stop();bufferPlayback=undefined;
+          // Decoding/support failures fall through to the existing media player.
+        }
+      }
       audioUrl = URL.createObjectURL(blob); audio = new Audio(audioUrl);
       audio.onended = () => finish('ended'); audio.onerror = fallback;
+      audio.onplaying = playbackStarted;
+      audio.onpause = () => {if (token===generation && audio && !audio.ended) finish('cancelled');};
+      waitForPlayback();
       await audio.play();
+      if (token===generation) playbackStarted();
     }).catch(() => { if (!request.signal.aborted) fallback(); });
   }
   function speak(text:string,onFinish?: (reason:SpeechEndReason)=>void,options:SpeechOptions={}) {
@@ -130,6 +170,8 @@ export function createSpeechPlayer(tts: (text: string, signal: AbortSignal) => P
     setServerSpeechEnabled(enabled: boolean) { serverEnabled = enabled; },
     isPrioritySpeaking() { return isSpeechPaused() || performance.now() < priorityUntil; },
     isSpeechPaused,
+    canListenDuringSpeech() { return !!bufferPlayback; },
+    getPlaybackMode() { return bufferPlayback ? 'web-audio' : audio ? 'media-element' : browserUtterance ? 'browser-tts' : activePriority>=0 ? 'loading' : 'idle'; },
     getSpeechLog() { return speechLog.slice(); },
     cancelSpeech, speak,
     cancelGuidance() { if(activePriority === 0 || activePriority === 2) {

@@ -196,3 +196,30 @@ test('automatic grasp tip waits for hand guidance and is spoken once after the r
     }
   }
 });
+
+test('the first phone direction is spoken after the normal gap and interrupted directions can retry', context => {
+  const original=Object.fromEntries(['window','document'].map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
+  let now=0,poll:()=>void=()=>{},busy=false,active:((reason:string)=>void)|undefined;
+  const spoken:string[]=[],refs:{current:unknown}[]=[];
+  let index=0,cleanup:(()=>void)|undefined;
+  Object.assign(globalThis,{window:{setInterval:(callback:()=>void)=>{poll=callback;return 1;}},document:{hidden:false}});
+  context.mock.method(performance,'now',()=>now);context.mock.method(globalThis,'clearInterval',()=>{});
+  const hook=compile('../src/useSceneSpeech.ts','useSceneSpeech',{
+    useRef:(value:unknown)=>{const i=index++;return refs[i]??(refs[i]={current:value});},useEffect:(effect:()=>()=>void)=>{cleanup??=effect();},
+    speak:(text:string,callback:(reason:string)=>void)=>{spoken.push(text);active=callback;busy=true;},
+    cancelGuidance:()=>{},isPrioritySpeaking:()=>busy,isSpeechPaused:()=>false,vibrate:()=>{},foundRecordingId:()=>undefined,
+  });
+  const tick=(t:number)=>{now=t;poll();};
+  const finish=(t:number,reason='ended')=>{now=t;busy=false;active?.(reason);};
+  try {
+    hook({id:1,label:'cup'},'Move phone left',false,1,false,undefined,true,false,false,'align_left');
+    tick(0);tick(1000);finish(1100);
+    tick(2599);assert.equal(spoken.length,1);
+    tick(2600);assert.equal(spoken[1],'Move phone left');
+    finish(2800,'cancelled');tick(4100);assert.equal(spoken[2],'Move phone left');
+  } finally {
+    cleanup?.();for(const [key,descriptor] of Object.entries(original)) {
+      if(descriptor)Object.defineProperty(globalThis,key,descriptor);else Reflect.deleteProperty(globalThis,key);
+    }
+  }
+});

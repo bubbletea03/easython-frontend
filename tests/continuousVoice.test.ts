@@ -29,6 +29,36 @@ test('hands-free stop is immediate on interim results and never requires the par
   assert.equal(f.errors.length,0);f.listener.dispose();
 });
 
+test('common Korean stop forms and a stop appended to earlier transcription are accepted',()=>{
+  for(const text of ['그만해요','그만하라','그만 하라고','이제 그만','그만 좀 해','컵을 찾았어요. 그만','그만 그만','스톱']) {
+    assert.equal(handsFreeCommand(text,false),'그만',text);
+  }
+  assert.equal(handsFreeCommand('그만하지 마',true),undefined);
+});
+
+test('a stop hypothesis is recognized when Chrome supplies it as a secondary alternative',()=>{
+  const f=fixture();f.tick(0);
+  f.instances[0].onresult?.({results:[Object.assign([{transcript:'금방'},{transcript:'그만해요'}],{isFinal:false})]});
+  assert.deepEqual(f.commands,['그만']);f.listener.dispose();
+});
+
+test('recognition restart waits for Android audio to finish instead of stealing playback focus',()=>{
+  const f=fixture();f.tick(0);f.instances[0].onend?.();
+  f.speak(true);f.tick(500);f.tick(1000);assert.equal(f.instances.length,1);
+  f.speak(false);f.tick(1349);assert.equal(f.instances.length,1);
+  f.tick(1350);assert.equal(f.instances.length,2);f.listener.dispose();
+});
+
+test('a silent stalled recognizer is recycled and transient network failures do not disable listening forever',()=>{
+  const f=fixture();f.tick(0);f.tick(15000);assert.equal(f.instances[0].aborts,1);
+  f.tick(15500);assert.equal(f.instances.length,2);f.listener.dispose();
+  const g=fixture();g.tick(0);g.instances[0].onerror?.({error:'network'});
+  g.tick(1500);g.instances[1].onerror?.({error:'network'});
+  g.tick(4500);g.instances[2].onerror?.({error:'network'});
+  g.tick(9000);assert.equal(g.instances.length,4);assert.equal(g.errors.length,1);
+  g.instances[3].result('그만');assert.deepEqual(g.commands,['그만']);g.listener.dispose();
+});
+
 test('ordinary silence and recognition end automatically restart listening without interrupting guidance state',()=>{
   const f=fixture();f.tick(0);f.instances[0].onend?.();
   f.tick(499);assert.equal(f.instances.length,1);

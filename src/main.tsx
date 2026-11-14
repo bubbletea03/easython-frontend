@@ -11,7 +11,7 @@ import type { DetectionTrack } from './detectionTracks';
 import { CameraHUD, StartScreen } from './CameraHUD';
 import { deriveScene, screenDirection } from './sceneUI';
 import { unlockFeedback, listeningCue, guideCue, vibrate } from './audioFeedback';
-import { speak, cancelSpeech, isPrioritySpeaking, getSpeechLog } from './speech';
+import { speak, cancelSpeech, isPrioritySpeaking, getSpeechLog, getPlaybackMode } from './speech';
 import { followHandlePoint } from './gripGeometry';
 import { createPhoneLossNoticeGate, handOccludesTarget, lostDirection, gridAlignment } from './phoneGuidance';
 import { useWakeLock } from './useWakeLock';
@@ -51,6 +51,7 @@ function App() {
   const [listening, setListening] = useState(false);
   const [voiceMessage, setVoiceMessage] = useState('');
   const [voiceError, setVoiceError] = useState<string>();
+  const [handsFreeError,setHandsFreeError] = useState<string>();
   const [cameraReady, setCameraReady] = useState(false);
   useWakeLock(cameraReady);
   const [viewport, setViewport] = useState({ width: 1, height: 1 });
@@ -65,12 +66,12 @@ function App() {
   const position = useRef<{text:string;clipId?:string} | undefined>(undefined);
   const search = useSearchCommands(video, selected, descriptionCapability, autoDescribeEnabled, position, chooseTarget);
   const { session } = search;
-  useContinuousVoice(cameraReady && session.running && !listening,
+  const voiceDiagnostics=useContinuousVoice(cameraReady && session.running && !listening,
     text=>{
       setVoiceMessage(text);
       if (text==='그만') stop();
       else void search.command(text);
-    },message=>setVoiceError(message));
+    },message=>setHandsFreeError(message),()=>setHandsFreeError(undefined));
   const backend = useBackendDetection(video, cameraReady, session.running, session.targets, session.objectKo, session.revision);
   descriptionCapability.current = backend.describeEnabled;
   const targeted = session.targets.length > 0;
@@ -139,7 +140,7 @@ function App() {
     const hash = () => setDev(location.hash === '#dev'); window.addEventListener('hashchange', hash);
     return () => { clearInterval(timer); window.removeEventListener('hashchange', hash); };
   }, []);
-  useEffect(() => { lastSeen.current = undefined; lossNotices.current.reset(); searchStarted.current = performance.now(); lastSearchHint.current = performance.now(); setChoicePrompt(undefined); }, [session.revision]);
+  useEffect(() => { lastSeen.current = undefined; lossNotices.current.reset(); searchStarted.current = performance.now(); lastSearchHint.current = performance.now(); setChoicePrompt(undefined); setHandsFreeError(undefined); }, [session.revision]);
   useEffect(() => {
     const event = targetChoices.current.update(current,now,session.revision,
       session.running && targeted && !listening && !search.busy && !search.safety && !document.hidden && !isPrioritySpeaking());
@@ -414,9 +415,12 @@ function App() {
     })()}
     {targeted && !lost && <HandOverlay hands={hands} source={source} viewport={screen} />}
     <CameraHUD scene={choicePrompt && !search.safety ? {...scene,title:choicePrompt,detail:'왼쪽 또는 오른쪽이라고 말씀해 주세요.',direction:undefined} : scene} heard={voiceMessage} active={session.running} pending={search.busy} onVoice={toggleVoice} onStop={stop} />
+    {handsFreeError && <p className="handsfree-error" role="status">{handsFreeError}</p>}
     {dev && <aside className="dev-panel" aria-label="개발 정보">
       <b>개발 정보</b>
       <p>{backend.status}</p><p>{handMessage}</p><p>{detectionMessage}</p>
+      <p>계속 듣기: {voiceDiagnostics.state} · 인식: {voiceDiagnostics.transcript || '없음'}</p>
+      <p>안내 재생: {getPlaybackMode()}</p>
       <p>{primary ? `${primary.item.label} · 신뢰도 ${Math.round(primary.item.score * 100)}%` : '탐지 없음'}</p>
       {primary && <p>실제 이름: {primary.item.name || '로컬 탐지'} · 정확 일치: {primary.item.exact ? '예' : '아니요'}</p>}
       <b>최근 음성 종료 기록</b>

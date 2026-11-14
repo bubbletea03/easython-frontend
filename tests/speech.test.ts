@@ -2,6 +2,7 @@ import test, { beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createSpeechPlayer } from '../src/speechCore.ts';
 import { deriveScene } from '../src/sceneUI.ts';
+import { createContinuousVoice, type ContinuousRecognizer } from '../src/continuousVoiceCore.ts';
 
 let utterances: FakeUtterance[];
 let audioInstances: FakeAudio[];
@@ -14,6 +15,8 @@ class FakeUtterance {
 class FakeAudio {
   onended: (() => void) | null = null;
   onerror: (() => void) | null = null;
+  onpause: (() => void) | null = null;
+  ended = false;
   constructor() { audioInstances.push(this); }
   async play() {}
   pause() {} removeAttribute() {} load() {}
@@ -37,6 +40,52 @@ function player(tts = async () => new Blob(['audio'],{type:'audio/mpeg'})) {
   const p = createSpeechPlayer(tts); players.push(p); return p;
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
+
+test('recognition starts and restarts alongside buffered speech without cancelling the guide',async()=>{
+  let starts=0,stops=0,recognitions=0,time=0;
+  const p=createSpeechPlayer(async()=>new Blob(['audio'],{type:'audio/mpeg'}),undefined,async()=>({
+    async start(){starts++;},stop(){stops++;},
+  }));players.push(p);p.setServerSpeechEnabled(true);
+  p.speak('Move left',undefined,{priority:'guidance'});await flush();
+  assert.equal(p.canListenDuringSpeech(),true);
+  const instances:ContinuousRecognizer[]=[];
+  const listener=createContinuousVoice({
+    create:()=>{const r:ContinuousRecognizer={lang:'',continuous:false,interimResults:false,onend:null,onerror:null,onresult:null,start(){recognitions++;},abort(){}};instances.push(r);return r;},
+    isSpeaking:()=>p.isPrioritySpeaking(),canStartDuringSpeech:()=>p.canListenDuringSpeech(),isHidden:()=>false,now:()=>time,
+    onCommand:()=>p.cancelSpeech(),onError:()=>{},
+  });
+  try {
+    listener.tick();instances[0].onend?.();time=500;listener.tick();
+    assert.equal(recognitions,2);assert.equal(starts,1);assert.equal(stops,0);assert.equal(p.isPrioritySpeaking(),true);
+    instances[1].onresult?.({results:[Object.assign([{transcript:'그만'}],{isFinal:false})]});
+    assert.equal(stops,1);assert.equal(p.isPrioritySpeaking(),false);
+  } finally {listener.dispose();}
+});
+
+test('unavailable Web Audio falls back to media playback and completion still releases the guide',async()=>{
+  const p=createSpeechPlayer(async()=>new Blob(['audio'],{type:'audio/mpeg'}),undefined,async()=>{throw new Error('unsupported');});
+  players.push(p);p.setServerSpeechEnabled(true);let ended=0;
+  p.speak('Guide',()=>ended++);await flush();
+  assert.equal(audioInstances.length,1);assert.equal(p.canListenDuringSpeech(),false);
+  audioInstances[0].onended?.();assert.equal(ended,1);assert.equal(p.isPrioritySpeaking(),false);
+});
+
+test('unexpected Android audio pause releases speech immediately so direction guidance can retry',async()=>{
+  const p=player();p.setServerSpeechEnabled(true);
+  const reasons:string[]=[];
+  p.speak('Move left',reason=>reasons.push(reason),{priority:'guidance'});await flush();
+  audioInstances[0].onpause?.();
+  assert.equal(p.isPrioritySpeaking(),false);assert.deepEqual(reasons,['cancelled']);
+  p.speak('Move left',undefined,{priority:'guidance'});await flush();assert.equal(audioInstances.length,2);
+});
+
+test('browser TTS that never starts times out in four seconds instead of holding guidance for a minute',context=>{
+  context.mock.timers.enable({apis:['setTimeout']});
+  const p=player(),reasons:string[]=[];
+  p.speak('Move left',reason=>reasons.push(reason),{priority:'guidance'});
+  context.mock.timers.tick(3999);assert.equal(p.isPrioritySpeaking(),true);
+  context.mock.timers.tick(1);assert.equal(p.isPrioritySpeaking(),false);assert.deepEqual(reasons,['timeout']);
+});
 
 test('speech diagnostics record the cancellation source and keep only five releases', () => {
   const p = player();

@@ -1,10 +1,11 @@
 import { isSpeechPaused } from './speech';
+import { getAudioContext, unlockAudioContext } from './audioContext';
 
-let context: AudioContext | undefined;
 export function unlockFeedback() {
-  try { context ??= new AudioContext(); void context.resume().catch(() => {}); } catch { /* Optional feedback on unsupported devices. */ }
+  unlockAudioContext();
 }
 function tone(frequency: number, at = 0, pan = 0) {
+  const context=getAudioContext();
   if (isSpeechPaused() || !context || context.state !== 'running') return;
   const oscillator = context.createOscillator();
   const gain = context.createGain();

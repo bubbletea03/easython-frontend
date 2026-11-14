@@ -39,7 +39,7 @@ export function useSceneSpeech(target: { id: number; label: string } | undefined
         speak(`${canReach ? '멈추세요. ' : ''}${current.label}${particle} 찾았어요.`, reason => {
           announcing = false;
           if (reason === 'ended') {
-            announced = true; lastSpokenAt = performance.now(); lastPhoneAt = lastSpokenAt;
+            announced = true; lastSpokenAt = performance.now(); lastPhoneAt = -Infinity;
           }
         }, {priority:'found',clipId:foundRecordingId(current.label)});
         return;
@@ -62,7 +62,10 @@ export function useSceneSpeech(target: { id: number; label: string } | undefined
       if (isPhone) lastPhoneAt = now;
       const pauseAfter = latest.current.graspAligned;
       speak(text, reason => {
-        if (reason !== 'ended' || pauseAfter) lastText = '';
+        if (reason !== 'ended') {
+          lastText = ''; spokenAt.delete(text);
+          if (isPhone) lastPhoneAt = -Infinity;
+        } else if (pauseAfter) lastText = '';
         if (reason === 'ended') lastSpokenAt = performance.now();
       }, {priority:'guidance', clipId:latest.current.clipId, quietAfterMs:pauseAfter ? 5000 : undefined});
     }, 100);

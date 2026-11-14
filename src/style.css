@@ -90,3 +90,5 @@ p { margin: 0; }
 
 .dev-panel li { margin: 6px 0; overflow-wrap: anywhere; }
 .dev-panel li small { display: block; opacity: .7; }
+
+.handsfree-error { position: absolute; top: calc(78px + env(safe-area-inset-top, 0px)); left: 14px; right: 14px; z-index: 7; padding: 10px 14px; border-radius: 12px; color: #fff; background: #17221ee8; font-size: 14px; pointer-events: none; }
