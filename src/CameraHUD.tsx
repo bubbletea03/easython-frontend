@@ -8,36 +8,28 @@ function Icon({ name, direction }: { name: 'mic' | 'stop' | 'listening' | 'arrow
   return <svg viewBox="0 -960 960 960" className="hud-icon" aria-hidden="true"><path d={designIcons[name]} /></svg>;
 }
 
-export function StartScreen({ onStart }: { onStart: () => void }) {
-  return <main className="start-screen"><button type="button" className="start-button" onClick={onStart} aria-label="시작. 카메라와 음성 안내를 켭니다">
-    <span className="start-brand">손길<small>물건 찾기부터 손 안내까지</small></span>
-    <span className="start-word">시작<small>누르면 카메라와<br />음성 안내가 켜져요</small></span>
-    <span className="start-hint"><span aria-hidden="true">↗</span> 화면 어디를 눌러도 돼요</span>
-  </button></main>;
-}
-
 export function CameraHUD({ scene, heard, active, onStop, onVoice }: { scene: SceneUI; heard: string; active: boolean; onStop: () => void; onVoice: () => void }) {
   const working = active || ['listening','processing','searching','found','guiding','lost','warning'].includes(scene.state);
+  const canStop = active && scene.state !== 'listening';
   const isListening = scene.state === 'listening';
   return <>
     <div className="camera-scrim top" aria-hidden="true" /><div className="camera-scrim bottom" aria-hidden="true" />
     {working && <div className={`state-frame${scene.state === 'warning' ? ' danger' : ''}${scene.state === 'lost' ? ` lost-${scene.lostSide}` : ''}`} aria-hidden="true" />}
     <header className="camera-toolbar">
-      {working && <button type="button" className="stop-button" onClick={onStop}><Icon name="stop" />그만</button>}
-      <p className={`status-pill${working ? '' : ' off'}${scene.state === 'warning' ? ' danger' : ''}`} role="status" aria-live="polite"><i aria-hidden="true" />{scene.status}</p>
+      <p className={`status-pill${working ? '' : ' off'}${scene.state === 'warning' ? ' danger' : ''}`} aria-hidden="true"><i aria-hidden="true" />{scene.status}</p>
     </header>
     <div className="bottom-hud">
-      {heard && (isListening || scene.state === 'unknown') && <div className="heard-bubble" role="status"><span>들은 말</span><b>“{heard}”</b></div>}
-      {!isListening && <div className={scene.state === 'warning' ? 'safety-card' : 'instruction-card'} role={scene.state === 'warning' || scene.state === 'error' ? 'alert' : 'status'} aria-live={scene.state === 'warning' ? 'assertive' : 'polite'}>
+      {heard && (isListening || scene.state === 'unknown') && <div className="heard-bubble" aria-hidden="true"><span>들은 말</span><b>“{heard}”</b></div>}
+      {!isListening && <div className={scene.state === 'warning' ? 'safety-card' : 'instruction-card'} aria-hidden="true">
         {scene.state === 'warning' ? <Icon name="warning" /> : scene.direction ? <Icon name="arrow" direction={scene.direction} /> : null}
         <div><b>{scene.title}</b>{scene.detail && <small>{scene.detail}</small>}</div>
       </div>}
-      <button type="button" className={`voice-orb${isListening ? ' is-listening' : ''}${scene.state === 'processing' ? ' is-processing' : ''}`} onClick={onVoice}
-        disabled={scene.state === 'processing'} aria-label={isListening ? '음성 인식 중지' : '말하기. 찾을 물건을 말씀해 주세요'} aria-pressed={isListening}>
+      <button type="button" className={`voice-orb${isListening ? ' is-listening' : ''}${scene.state === 'processing' ? ' is-processing' : ''}`} onClick={canStop ? onStop : onVoice}
+        disabled={scene.state === 'processing' && !canStop} aria-label={canStop ? '그만. 안내를 멈춥니다' : isListening ? '음성 인식 중지' : '말하기. 찾을 물건을 말씀해 주세요'} aria-pressed={isListening}>
         {isListening && <><span className="orb-ring ring-1" /><span className="orb-ring ring-2" /><span className="orb-ring ring-3" /></>}
-        <Icon name={isListening ? 'listening' : scene.state === 'done' ? 'check' : 'mic'} />
+        <Icon name={canStop ? 'stop' : isListening ? 'listening' : scene.state === 'done' ? 'check' : 'mic'} />
       </button>
-      <p className="orb-label">{isListening ? '듣고 있어요' : scene.state === 'processing' ? '확인하는 중' : '말하기'}</p>
+      <p className="orb-label" aria-hidden="true">{canStop ? '그만' : isListening ? '듣고 있어요' : scene.state === 'processing' ? '확인하는 중' : '말하기'}</p>
     </div>
   </>;
 }

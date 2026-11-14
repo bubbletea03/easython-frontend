@@ -22,7 +22,7 @@ test('disabled or paused sessions restart continuity; manual requests suppress a
   gate.update(item(1, 0), 0, true);
   gate.update(item(1, 1500), 1500, false);
   assert.equal(gate.update(item(1, 3000), 3000, true), false);
-  gate.mark(1);
+  gate.mark();
   for (let t = 3750; t <= 6000; t += 750) assert.equal(gate.update(item(1, t), t, true), false);
   gate.reset();
   for (let t = 6000; t < 9000; t += 750) gate.update(item(1, t), t, true);

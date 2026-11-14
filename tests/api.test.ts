@@ -70,12 +70,12 @@ test('parse sends text once; disabled describe capability is not a parse readine
 });
 test('describe reads nested result safely, prioritizes safety and never accepts arbitrary coordinates', async () => {
   const api = client(async (_url,init) => {
-    assert.equal((init?.body as FormData).has('prompt'),false);
-    return response({ result: { safety:'뜨거워요.',grasp:'손잡이',comment:'컵',handle_point:{x:.8,y:.5} }, grasp:'wrong' });
+    assert.equal((init?.body as FormData).has('prompt'),true);
+    return response({ result: { hazard:'hot',safety:'뜨거워요.',grasp:'손잡이',comment:'컵',handle_point:{x:.8,y:.5} }, grasp:'wrong' });
   });
   const result = await api.describe(new Blob());
   assert.deepEqual(result.sentences,['뜨거워요.','손잡이','컵']); assert.deepEqual(result.handlePoint,{x:.8,y:.5});
-  assert.deepEqual(readDescription([{grasp:'손잡이를 잡아 주세요.'}]),{sentences:['손잡이를 잡아 주세요.']});
+  assert.deepEqual(readDescription([{grasp:'손잡이를 잡아 주세요.'}]),{sentences:['손잡이를 잡아 주세요.'],grasp:'손잡이를 잡아 주세요.'});
   assert.equal(readDescription([{handle_point:{x:.2,y:.3}},{handle_point:{x:.8,y:.5}}]).handlePoint,undefined);
   assert.deepEqual(readDescription({safety:null,grasp:3,handle_point:{x:2,y:.5}}),{sentences:[]});
 });

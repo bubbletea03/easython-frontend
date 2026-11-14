@@ -8,7 +8,7 @@ import { useSceneSpeech } from './useSceneSpeech';
 import { useBackendDetection } from './useBackendDetection';
 import { useSearchCommands } from './useSearchCommands';
 import type { DetectionTrack } from './detectionTracks';
-import { CameraHUD, StartScreen } from './CameraHUD';
+import { CameraHUD } from './CameraHUD';
 import { deriveScene, screenDirection } from './sceneUI';
 import { unlockFeedback, listeningCue, guideCue, vibrate } from './audioFeedback';
 import { speak, cancelSpeech, isPrioritySpeaking } from './speech';
@@ -27,7 +27,8 @@ type VoiceRecognition = {
 };
 
 function App() {
-  const [started, setStarted] = useState(false);
+  const voiceUnlocked = useRef(false);
+  const preparingVoice = useRef(false);
   const [cameraError, setCameraError] = useState(false);
   const [dev, setDev] = useState(() => location.hash === '#dev');
   const [now, setNow] = useState(() => performance.now());
@@ -86,9 +87,8 @@ function App() {
     targetLabel: primary?.item.label || session.objectKo, found: !!primary && !primary.item.missing, lost,
     lostSide: lastSeen.current && lastSeen.current.x < .5 ? 'left' : 'right', guiding: !!handPoint,
     direction, timedOut: now - searchStarted.current > 30000 });
-  const spokenGuidance = direction ? `${{left:'왼쪽으로',right:'오른쪽으로',up:'위쪽으로',down:'아래쪽으로'}[direction]} 이동하세요.` : '화면에서 겹쳐 있어요.';
   useSceneSpeech(targeted && primary && !primary.item.missing ? primary.item : undefined,
-    scene.state === 'guiding' || scene.state === 'found' ? spokenGuidance : '', listening || search.busy || !!search.safety);
+    scene.state === 'guiding' || scene.state === 'found' ? scene.title : '', listening || search.busy || !!search.safety, session.revision, lost, scene.state === 'found' ? scene.detail : undefined);
 
   useEffect(() => {
     if(gripSuccess.current.update(primary?.item.id, primary?.rect, nearestHand, now,
@@ -123,16 +123,12 @@ function App() {
     return () => clearInterval(timer);
   }, [scene.state, direction, Math.round((nearestHand?.distance ?? 0) * 10)]);
   useEffect(() => { if (scene.state === 'done') vibrate([80,60,80]); }, [scene.state]);
+  const searchTimedOut = scene.state === 'searching' && now - searchStarted.current > 30000;
   useEffect(() => {
-    if (!targeted || !primary || primary.item.missing) return;
-    const timer = setTimeout(() => vibrate(200), 1000);
-    return () => clearTimeout(timer);
-  }, [primary?.item.id, primary?.item.missing]);
-  useEffect(() => {
-    if (scene.state === 'lost' || (scene.state === 'searching' && now - searchStarted.current > 30000)) {
+    if (scene.state === 'lost' || searchTimedOut) {
       speak(`${scene.title}. ${scene.detail || ''}`,undefined,{clipId:scene.state==='lost' ? `lost_turn_${scene.lostSide}` : 'search_timeout'});
     }
-  }, [scene.state, scene.title]);
+  }, [scene.state, searchTimedOut]);
   useEffect(()=>{if(voiceError)speak(voiceError);},[voiceError]);
 
   useEffect(() => {
@@ -143,7 +139,7 @@ function App() {
     });
     observer.observe(element);
     return () => observer.disconnect();
-  }, [started]);
+  }, []);
 
   useEffect(() => () => {
     clearTimeout(voiceStartTimer.current);
@@ -180,11 +176,13 @@ function App() {
 
   function toggleVoice() {
     if (search.busy) return;
-    if (!cameraReady) { setStarted(false); return; }
+    unlockFeedback();
+    if (!cameraReady) return;
     setVoiceError(undefined);
     cancelSpeech();
     if (recognition.current) {
-      if(voiceStartTimer.current!==undefined) {
+      if(preparingVoice.current || voiceStartTimer.current!==undefined) {
+        preparingVoice.current=false;
         clearTimeout(voiceStartTimer.current);voiceStartTimer.current=undefined;
         recognition.current=null;setListening(false);
       } else recognition.current.stop();
@@ -230,7 +228,11 @@ function App() {
       if (!receivedResult && !failed) setVoiceError('음성이 들리지 않았어요. 다시 말씀해 주세요.');
     };
     recognition.current = current;
-    unlockFeedback(); listeningCue(true); setListening(true); setVoiceMessage('');
+    setListening(true); setVoiceMessage('');
+    const beginListening = () => {
+      preparingVoice.current = false;
+      if (recognition.current !== current || document.hidden) return;
+      listeningCue(true);
     // The two cue tones finish after 190ms. Start recording after they stop.
     voiceStartTimer.current=setTimeout(()=>{
       voiceStartTimer.current=undefined;
@@ -240,10 +242,16 @@ function App() {
         recognition.current=null;setListening(false);setVoiceError('음성 인식을 시작하지 못했습니다. 다시 눌러 주세요.');
       }
     },250);
+    };
+    if (!voiceUnlocked.current) {
+      voiceUnlocked.current = true; preparingVoice.current = true;
+      speak('준비됐어요. 말씀해 주세요.', reason => {
+        if (reason !== 'cancelled') beginListening();
+      });
+    } else beginListening();
   }
 
   useEffect(() => {
-    if (!started) return;
     setCameraReady(false); setCameraError(false);
     let disposed = false;
     let stream: MediaStream | null = null;
@@ -273,7 +281,7 @@ function App() {
           element.srcObject = next;
           await element.play();
         }
-        if (!disposed) { setStatus('카메라가 켜졌습니다.'); setCameraReady(true); speak('준비됐어요. 말하기 버튼을 누르고 찾을 물건을 말씀해 주세요.'); }
+        if (!disposed) { setStatus('카메라가 켜졌습니다.'); setCameraReady(true); }
       } catch {
         stream?.getTracks().forEach(track => track.stop());
         if (!disposed) {
@@ -290,13 +298,13 @@ function App() {
       stream?.getTracks().forEach(track => track.stop());
       if (element && element.srcObject === stream) element.srcObject = null;
     };
-  }, [started]);
+  }, []);
 
-  if (!started) return <StartScreen onStart={() => { unlockFeedback(); search.start(); setStarted(true); }} />;
+
 
   return <main className={`camera-screen scene-${scene.state}`}>
     <video ref={video} autoPlay muted playsInline aria-label="카메라 미리보기" />
-    <button className="camera-tap-zone" type="button" tabIndex={-1} aria-hidden="true" disabled={search.busy} onClick={()=>search.outcome==='done'?search.start():toggleVoice()} />
+    <button className="camera-tap-zone" type="button" tabIndex={-1} aria-hidden="true" disabled={search.busy && !session.running} onClick={()=>session.running ? search.stop() : toggleVoice()} />
     <div className="detection-overlay" aria-hidden="true">
       {current.filter(({ item }) => item.id !== primary?.item.id).map(({ item, rect }) => <div key={item.id} className="detection-box detection-secondary" style={{ left: rect.x, top: rect.y, width: rect.width, height: rect.height }} />)}
       {primary && !lost && <div key={primary.item.id} className={`detection-box${primary.item.missing ? ' is-missing' : ''}`} style={{ left: primary.rect.x, top: primary.rect.y, width: primary.rect.width, height: primary.rect.height }}>

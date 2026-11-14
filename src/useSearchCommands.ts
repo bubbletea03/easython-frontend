@@ -27,13 +27,13 @@ export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, sel
     describeLock.current = false; describeTarget.current = undefined; handleTarget.current = undefined; setBusy(false); setHandlePoint(undefined); setSafety(undefined); cancelSpeech();
   }
   function stop() {
-    cancel(); setOutcome('idle'); setSession(s => ({ ...s, running: false, revision: s.revision + 1 })); notify('탐색과 안내를 중지했습니다.');
+    cancel(); setOutcome('idle'); setSession(s => ({ ...s, running: false, revision: s.revision + 1 })); notify('안내를 멈췄어요.');
   }
   function start() {
     cancel();
-    setOutcome('searching');
-    setMessage('주변 물체를 찾고 있어요. 찾을 물건은 말하기 버튼으로 말씀해 주세요.');
-    setSession(s => ({ running: true, targets: [], objectKo: '', revision: s.revision + 1 }));
+    setOutcome('idle');
+    setMessage('');
+    setSession(s => ({ running: false, targets: [], objectKo: '', revision: s.revision + 1 }));
   }
   function completeGrip() {
     cancel(); setOutcome('done');
@@ -53,14 +53,14 @@ export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, sel
     const text=`${objectKo || cleaned.join(', ')} 찾을게요. 폰을 천천히 돌려주세요.`;
     setMessage(text);speak(text,undefined,{clipId:findRecordingId(objectKo)});
   }
-  async function describe() {
+  async function describe(automatic = false) {
     if (describeLock.current) return;
     const item = selected.current;
     if (!item || item.missing) { notify('먼저 물체를 카메라에 비춰 주세요.'); return; }
     if (describeEnabled.current === false) { notify('서버의 설명 기능이 비활성화되어 있습니다. 물체 탐지는 계속합니다.'); return; }
     cancel(); describeLock.current = true;
     describeTarget.current = item.id;
-    autoGrip.current.mark(item.id);
+    autoGrip.current.mark();
     const token = generation.current;
     const request = new AbortController(); controller.current = request;
     setBusy(true); setMessage('잡는 방법을 확인하고 있어요.');
@@ -78,9 +78,9 @@ export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, sel
         speak(result.safety, () => {
           if (alive.current && generation.current === token) setSafety(undefined);
         }, {priority:'safety',maxDurationMs:5000});
-        const rest=result.sentences.filter(sentence=>sentence!==result.safety).join(' ');
+        const rest=(automatic ? [result.grasp].filter((text): text is string => !!text) : result.sentences).filter(sentence=>sentence!==result.safety).join(' ');
         if(rest) speak(rest);
-      } else notify(result.sentences.join(' ') || '이 사진에서는 잡는 방법을 확인할 수 없어요.');
+      } else notify((automatic ? result.grasp : result.sentences.join(' ')) || '이 사진에서는 잡는 방법을 확인할 수 없어요.');
     } catch (error) {
       if (!request.signal.aborted && generation.current === token && alive.current) notify(error instanceof Error ? error.message : '설명을 가져오지 못했습니다.');
     } finally {
@@ -97,7 +97,7 @@ export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, sel
       }
       const enabled = autoDescribeEnabled.current && describeEnabled.current === true && !document.hidden;
       // Automatic descriptions must not cancel the discovery announcement.
-      if (!isPrioritySpeaking() && autoGrip.current.update(item, performance.now(), enabled) && !describeLock.current) void describe();
+      if (!isPrioritySpeaking() && autoGrip.current.update(item, performance.now(), enabled) && !describeLock.current) void describe(true);
     }, 100);
     return () => clearInterval(timer);
   }, []);

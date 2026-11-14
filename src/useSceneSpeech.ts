@@ -1,42 +1,44 @@
-import { useEffect, useRef } from 'react';
+﻿import { useEffect, useRef } from 'react';
 import { isPrioritySpeaking, speak, cancelGuidance } from './speech';
 import { foundRecordingId } from './recordedSpeech';
+import { vibrate } from './audioFeedback';
 
-export function useSceneSpeech(target: { id: number; label: string } | undefined, guidance: string, listening: boolean) {
-  const latest = useRef({ target, guidance, listening });
-  const candidate = useRef<{ id: number | undefined; since: number }>({ id: undefined, since: 0 });
-  latest.current = { target, guidance, listening };
-  // Reset on every actual selection/loss, including gaps shorter than the speech timer.
+export function useSceneSpeech(target: { id: number; label: string } | undefined, guidance: string, listening: boolean, revision: number, lost: boolean, detail?: string) {
+  const latest = useRef({ target, guidance, listening, lost, detail });
+  latest.current = { target, guidance, listening, lost, detail };
   useEffect(() => {
-    candidate.current = { id: target?.id, since: performance.now() };
-    cancelGuidance();
-  }, [target?.id]);
-  useEffect(() => {
-    let announced: number | undefined;
-    let announcing: number | undefined;
-    let lastSpokenAt = -Infinity;
+    let announced = false, announcing = false, felt = false;
+    let visibleSince: number | undefined;
+    let candidate = '', candidateSince = 0, lastText = '', lastSpokenAt = -Infinity;
+    const spokenAt = new Map<string, number>();
     const timer = window.setInterval(() => {
-      const { target: current, guidance: text, listening: recording } = latest.current;
+      const { target: current, guidance: text, listening: paused, lost: missing, detail: extra } = latest.current;
       const now = performance.now();
-      if (document.hidden || recording || !current) {
-        candidate.current = { id: undefined, since: now };
-        cancelGuidance();
+      if (missing) { announced = false; felt = false; lastText = ''; spokenAt.clear(); }
+      if (!current || document.hidden || paused) {
+        visibleSince = undefined; candidate = ''; cancelGuidance(); return;
+      }
+      visibleSince ??= now;
+      if (candidate !== text) { candidate = text; candidateSince = now; }
+      if (now - visibleSince < 1000 || announcing) return;
+      if (!announced) {
+        if (!felt) { vibrate(200); felt = true; }
+        const code = current.label.charCodeAt(current.label.length - 1);
+        const particle = code >= 0xAC00 && code <= 0xD7A3 && (code - 0xAC00) % 28 !== 0 ? '을' : '를';
+        announcing = true;
+        speak(`${current.label}${particle} 찾았어요.`, reason => {
+          announcing = false;
+          if (reason === 'ended') {
+            announced = true; lastSpokenAt = performance.now();
+            if (extra && latest.current.target && !latest.current.lost) speak(extra, undefined, {priority:'guidance'});
+          }
+        }, {priority:'found', clipId:foundRecordingId(current.label)});
         return;
       }
-      if (candidate.current.id !== current.id) candidate.current = { id: current.id, since: now };
-      const isNew = announced !== current.id;
-      if (now - candidate.current.since < 1000 || announcing === current.id) return;
-      if (!isNew && (isPrioritySpeaking() || window.speechSynthesis?.speaking || window.speechSynthesis?.pending || now - lastSpokenAt < (text ? 1500 : 5000))) return;
-      if (!isNew && !text) return;
-      const lastCharacter = current.label.charCodeAt(current.label.length - 1);
-      const particle = lastCharacter >= 0xAC00 && lastCharacter <= 0xD7A3 && (lastCharacter - 0xAC00) % 28 !== 0 ? '을' : '를';
-      lastSpokenAt = now;
-      if (isNew) announcing = current.id;
-      speak(isNew ? `${current.label}${particle} 찾았어요.` : text, reason => {
-        if (isNew) announcing = undefined;
-        if(reason==='ended' && latest.current.target?.id===current.id) announced=current.id;
-      },{priority:isNew?'found':'guidance',clipId:isNew?foundRecordingId(current.label):undefined});
+      if (!text || text === lastText || now - candidateSince < 500 || now - lastSpokenAt < 1500 || now - (spokenAt.get(text) ?? -Infinity) < 3000 || isPrioritySpeaking()) return;
+      lastText = text; lastSpokenAt = now; spokenAt.set(text, now);
+      speak(text, reason => { if (reason !== 'ended') lastText = ''; }, {priority:'guidance'});
     }, 100);
     return () => { clearInterval(timer); cancelGuidance(); };
-  }, []);
+  }, [revision]);
 }

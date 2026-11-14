@@ -3,7 +3,7 @@ export type ApiStats = { window_sec: number; queue_length: number } & Record<str
 export type ServerDetection = { label: string; target: string; score: number; box: { x: number; y: number; w: number; h: number } };
 export type DetectResult = { detections: ServerDetection[]; mode?: string; color_filter?: unknown; color_rejected?: unknown };
 export type ParseResult = { intent: 'find' | 'where' | 'how' | 'stop' | 'unknown'; object_ko: string | null; targets: string[] };
-export type Description = { sentences: string[]; safety?: string; handlePoint?: { x: number; y: number } };
+export type Description = { sentences: string[]; grasp?: string; safety?: string; handlePoint?: { x: number; y: number } };
 export const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const unit = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1;
 
@@ -108,6 +108,7 @@ export function createApiClient(config: { baseUrl: string; apiKey: string; requi
     },
     async describe(image: Blob, signal?: AbortSignal): Promise<Description> {
       const form = new FormData(); form.append('image', image, 'capture.jpg');
+      form.append('prompt', 'Return JSON with hazard, safety, grasp, comment, handle_point {x,y} normalized coordinates, and confidence (high or low). All sentences must be short, polite Korean. hazard must be hot (visible steam or boiling), spill (full drink), edge (table edge), broken (visible breakage), sharp (exposed blade), or null, based only on visible evidence. safety must be one short sentence only when hazard is present, otherwise null. Exclude generic cautions about screens, charging, or dropping. Never claim safe or not hot. grasp and comment must each be one short sentence.');
       const b = await request('/describe', { method: 'POST', body: form }, signal, 45000);
       if (!record(b) || !(record(b.result) || Array.isArray(b.result))) throw invalid();
       return readDescription(b.result);
@@ -122,8 +123,12 @@ export function readDescription(result: unknown): Description {
   }
   if (!record(result)) return { sentences: [] };
   if (result.confidence === 'low') return { sentences: ['물건을 확실하게 확인하지 못했어요. 카메라를 가까이 비추고 다시 시도해 주세요.'] };
-  const sentences = ['safety', 'grasp', 'comment'].flatMap(key => typeof result[key] === 'string' && result[key].trim() ? [result[key].trim()] : []);
+  const hazard = typeof result.hazard === 'string' && ['hot', 'spill', 'edge', 'broken', 'sharp'].includes(result.hazard);
+  const safety = hazard && typeof result.safety === 'string' ? result.safety.trim() : '';
+  const grasp = typeof result.grasp === 'string' ? result.grasp.trim() : '';
+  const comment = typeof result.comment === 'string' ? result.comment.trim() : '';
+  const sentences = [safety, grasp, comment].filter(Boolean);
   const point = result.handle_point;
-  return { sentences, ...(typeof result.safety === 'string' && result.safety.trim() ? { safety: result.safety.trim() } : {}),
+  return { sentences, ...(safety ? { safety } : {}), ...(grasp ? { grasp } : {}),
     ...(record(point) && unit(point.x) && unit(point.y) ? { handlePoint: { x: point.x, y: point.y } } : {}) };
 }

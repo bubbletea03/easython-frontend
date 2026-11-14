@@ -1,6 +1,7 @@
 import { useEffect, useState, type RefObject } from 'react';
 import type { Detection } from '@mediapipe/tasks-vision';
 import { isPersonLabel } from './objectFilter';
+import { selectLargestHand } from './primaryHand';
 import { updateTracks, TRACK_HOLD_MS, type DetectionBox, type DetectionTrack } from './detectionTracks';
 import type { NormalizedLandmark } from '@mediapipe/tasks-vision';
 
@@ -78,7 +79,7 @@ export function useObjectDetection(video: RefObject<HTMLVideoElement | null>, ca
       } else if (data.type === 'result') {
         busy = false;
         if (document.hidden) { tracks = []; setDetections([]); setHands([]); return; }
-        setHands(data.hands ?? []);
+        setHands(selectLargestHand<NormalizedLandmark>(data.hands ?? []));
         lastHandsAt = performance.now();
         const items: DetectionBox[] = (data.detections as Detection[]).flatMap(item => {
           const box = item.boundingBox;
