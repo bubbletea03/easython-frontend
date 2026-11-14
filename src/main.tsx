@@ -39,6 +39,8 @@ function App() {
   const bladeGate=useRef(createBladeWarningGate());
   const [bladeWarning,setBladeWarning]=useState<string>();
   const bladeSpeaking=useRef(false);
+  const bladeActive=useRef<number|undefined>(undefined);
+  const handleNeeded=useRef<number|undefined>(undefined);
   const handleHold=useRef<number|undefined>(undefined);
   const [listening, setListening] = useState(false);
   const [voiceMessage, setVoiceMessage] = useState('');
@@ -96,6 +98,7 @@ function App() {
   const centered = !!guideRect && !alignmentDirection;
   const sharp=!!primary&&(SHARP_LABELS.has((primary.item.name||'').toLowerCase())||SHARP_LABELS.has(primary.item.label)||search.hazard?.targetId===primary.item.id&&search.hazard.kind==='sharp');
   const waitingHandle=sharp&&!handlePoint;
+  handleNeeded.current=waitingHandle&&session.running&&!search.paused?primary?.item.id:undefined;
   const destination = handlePoint ? projectPoint(handlePoint, source, screen) : !sharp && guideRect ? { x: guideRect.x + guideRect.width / 2, y: guideRect.y + guideRect.height / 2 } : undefined;
   const foundVisible = !!primary && (!primary.item.missing || now-primary.item.lastSeen < 2000);
   const occluded = !foundVisible && handOccludesTarget(handPoint, destination, viewport);
@@ -104,7 +107,7 @@ function App() {
   const researching = lost && missingFor >= 10000;
   const lostSide = lostDirection(lastSeen.current?.x ?? .5);
   const phase=phaseGate.current.update({now,revision:session.revision,visible:foundVisible||occluded,lost,centered,handVisible:!!handPoint,cx,
-    enabled:session.running&&!search.paused&&!listening&&!search.busy&&!waitingHandle});
+    enabled:session.running&&!search.paused&&!listening&&!search.busy&&!waitingHandle&&!isPrioritySpeaking()});
   const handPhase=phase.phase==='hand'&&!waitingHandle;
   const direction=handPhase&&handPoint&&destination?screenDirection(destination.x-handPoint.x,destination.y-handPoint.y):alignmentDirection;
   const effectiveSafety=bladeWarning||search.safety;
@@ -132,8 +135,9 @@ function App() {
     search.requestHandle();
     if(handleHold.current!==primary?.item.id){
       handleHold.current=primary?.item.id;
-      cancelSpeech();stopFeedback();
-      speak(backend.describeEnabled===false?'손잡이를 확인할 수 없어 손 안내를 멈췄어요. 손을 잠시 멈춰 주세요.':'손잡이를 확인하고 있어요. 손을 잠시 멈춰 주세요.',undefined,{priority:'safety',maxDurationMs:6000});
+      stopFeedback();
+      const id=primary?.item.id;
+      speak(backend.describeEnabled===false?'손잡이를 확인할 수 없어 손 안내를 멈췄어요. 손을 잠시 멈춰 주세요.':'손잡이를 확인하고 있어요. 손을 잠시 멈춰 주세요.',undefined,{priority:'safety',maxDurationMs:6000,isRelevant:()=>handleNeeded.current===id});
     }
   },[now,session.running,search.paused,listening,search.busy,foundVisible,waitingHandle,primary?.item.id,backend.describeEnabled]);
   useEffect(()=>{
@@ -141,9 +145,9 @@ function App() {
     const fingers=hands.flatMap(hand=>[projectPoint(hand[4],source,screen),projectPoint(hand[8],source,screen)]);
     const warning=bladeGate.current.update(primary?.item.id,zone,fingers,now,
       session.running&&sharp&&foundVisible&&!search.paused&&!listening&&!document.hidden);
+    bladeActive.current=warning.danger?primary?.item.id:undefined;
     if(!warning.danger){
       setBladeWarning(undefined);
-      if(bladeSpeaking.current){cancelSpeech();bladeSpeaking.current=false;}
       return;
     }
     const finger=zone&&fingers.find(p=>p.x>=zone.x-zone.width*.1&&p.x<=zone.x+zone.width*1.1&&p.y>=zone.y-zone.height*.1&&p.y<=zone.y+zone.height*1.1);
@@ -151,8 +155,9 @@ function App() {
     const text=`멈추세요. 칼날 쪽이에요. ${side?`손잡이는 ${{left:'왼쪽',right:'오른쪽',up:'앞쪽',down:'몸 쪽'}[side]}이에요.`:'손잡이 쪽으로 손을 옮겨 주세요.'}`;
     setBladeWarning(previous=>previous===text?previous:text);
     if(warning.announce&&!bladeSpeaking.current){
-      cancelSpeech();stopFeedback();bladeSpeaking.current=true;vibrate([400,150,400]);
-      speak(text,()=>{bladeSpeaking.current=false;},{priority:'safety',maxDurationMs:6000});
+      stopFeedback();bladeSpeaking.current=true;vibrate([400,150,400]);
+      const id=primary?.item.id;
+      speak(text,()=>{bladeSpeaking.current=false;},{priority:'safety',maxDurationMs:6000,isRelevant:()=>bladeActive.current===id});
     }
   },[now,primary?.item.id,sharp,foundVisible,session.running,search.paused,listening]);
 

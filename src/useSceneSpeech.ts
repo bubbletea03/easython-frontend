@@ -44,7 +44,7 @@ export function useSceneSpeech(target: { id: number; label: string } | undefined
           if (reason === 'ended') {
             announced = true; lastSpokenAt = performance.now(); lastPhoneAt = -Infinity;
           }
-        }, {priority:'found',clipId:foundRecordingId(current.label)});
+        }, {priority:'found',clipId:foundRecordingId(current.label),isRelevant:()=>!!latest.current.target&&!latest.current.listening&&!latest.current.lost});
         return;
       }
       const transition=latest.current.phaseNotice;
@@ -52,7 +52,7 @@ export function useSceneSpeech(target: { id: number; label: string } | undefined
         lastSpokenAt=now;if(transition.phone){lastPhoneAt=now;phoneCue();}
         speak(transition.text,reason=>{
           if(reason==='ended'){phaseSpoken.add(transition.id);lastSpokenAt=performance.now();if(transition.phone)lastPhoneAt=lastSpokenAt;else reachAnnounced=true;}
-        },{priority:'guidance'});return;
+        },{priority:'guidance',isRelevant:()=>latest.current.phaseNotice?.id===transition.id&&!latest.current.listening});return;
       }
       if (canReach && extra && !reachAnnounced && !reaching && reachSince !== undefined && now-reachSince >= 500 && now-lastSpokenAt >= 1500 && !isPrioritySpeaking()) {
         reaching = true; lastSpokenAt = now;
@@ -81,7 +81,8 @@ export function useSceneSpeech(target: { id: number; label: string } | undefined
         } else if (pauseAfter) lastText = '';
         if(reason==='ended'&&pauseAfter)alignedAnnounced=true;
         if (reason === 'ended') lastSpokenAt = performance.now();
-      }, {priority:'guidance', clipId:latest.current.clipId, quietAfterMs:pauseAfter ? 5000 : undefined});
+      }, {priority:'guidance', clipId:latest.current.clipId, quietAfterMs:pauseAfter ? 5000 : undefined,
+        isRelevant:()=>latest.current.guidance===text&&!latest.current.listening&&!!latest.current.target});
     }, 100);
     return () => { clearInterval(timer); cancelGuidance(); };
   }, [revision]);

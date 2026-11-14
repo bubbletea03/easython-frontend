@@ -9,7 +9,7 @@ let audioInstances: FakeAudio[];
 let players: ReturnType<typeof createSpeechPlayer>[];
 class FakeUtterance {
   text: string; lang = ''; rate = 1;
-  onend?: () => void; onerror?: () => void;
+  onstart?:()=>void;onend?: () => void; onerror?: () => void;
   constructor(text: string) { this.text = text; }
 }
 class FakeAudio {
@@ -40,6 +40,22 @@ function player(tts = async () => new Blob(['audio'],{type:'audio/mpeg'})) {
   const p = createSpeechPlayer(tts); players.push(p); return p;
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
+
+test('a warning cannot interrupt guidance and its duration budget cannot cut a started sentence',context=>{
+  context.mock.timers.enable({apis:['setTimeout']});const p=player();
+  p.speak('Full guide',undefined,{priority:'guidance'});utterances[0].onstart?.();
+  p.speak('Warning',undefined,{priority:'safety',maxDurationMs:5000});
+  context.mock.timers.tick(20000);assert.equal(utterances.length,1);
+  utterances[0].onend?.();assert.equal(utterances[1].text,'Warning');utterances[1].onstart?.();
+  p.speak('Next step');context.mock.timers.tick(10000);assert.equal(utterances.length,2);
+  utterances[1].onend?.();assert.equal(utterances[2].text,'Next step');
+});
+
+test('an end callback cannot jump ahead of instructions already waiting',()=>{
+  const p=player();p.speak('First',()=>p.speak('Third'));p.speak('Second');
+  utterances[0].onend?.();assert.equal(utterances[1].text,'Second');
+  utterances[1].onend?.();assert.equal(utterances[2].text,'Third');
+});
 
 test('recognition starts and restarts alongside buffered speech without cancelling the guide',async()=>{
   let starts=0,stops=0,recognitions=0,time=0;
@@ -90,6 +106,7 @@ test('browser TTS that never starts times out in four seconds instead of holding
 test('speech diagnostics record the cancellation source and keep only five releases', () => {
   const p = player();
   p.speak('Old guidance',undefined,{priority:'guidance'});
+  p.cancelSpeech();
   p.speak('Warning',undefined,{priority:'safety'});
   const cancelled=p.getSpeechLog()[0];
   assert.equal(cancelled.text,'Old guidance');assert.equal(cancelled.reason,'cancelled');assert.ok(cancelled.caller);
@@ -98,27 +115,28 @@ test('speech diagnostics record the cancellation source and keep only five relea
   assert.equal(p.getSpeechLog().length,5);assert.equal(p.getSpeechLog()[4].text,'Message 4');
 });
 
-test('alignment completion silences all speech for five seconds and discards stale queued notices', context => {
+test('alignment completion delays queued speech for five seconds and skips stale notices at playback time', context => {
+  context.mock.timers.enable({apis:['setTimeout']});
   let now = 1000;
   context.mock.method(performance, 'now', () => now);
   const p = player(); const results: string[] = [];
   p.speak('Aligned', undefined, {quietAfterMs:5000});
-  p.speak('Stale notice', reason => results.push(reason));
+  let relevant=true;
+  p.speak('Stale notice', reason => results.push(reason),{isRelevant:()=>relevant});
   now = 4000;
   assert.equal(p.isSpeechPaused(),false);
   utterances[0].onend?.();
   assert.equal(p.isSpeechPaused(),true);
-  assert.deepEqual(results,['cancelled']);
-  for (const priority of ['guidance','normal','found','safety'] as const) {
-    p.speak('Muted',undefined,{priority});
-  }
+  assert.deepEqual(results,[]);relevant=false;
   now = 8999;
   assert.equal(p.isPrioritySpeaking(),true);
-  p.speak('Still muted');
+  p.speak('Current guidance',undefined,{priority:'guidance'});
+  context.mock.timers.tick(4999);
   assert.equal(utterances.length,1);
   now = 9000;
   assert.equal(p.isSpeechPaused(),false);
-  p.speak('Current guidance',undefined,{priority:'guidance'});
+  context.mock.timers.tick(1);
+  assert.deepEqual(results,['cancelled']);
   assert.equal(utterances[1].text,'Current guidance');
 });
 
@@ -146,38 +164,44 @@ test('repeated dynamic speech reuses generated audio without another TTS request
   assert.equal(audioInstances.length,2);
 });
 
-test('discovery interrupts search speech and completes before queued descriptions', () => {
+test('discovery and all later instructions wait for the entire current sentence in FIFO order', () => {
   const p = player(); const results: string[] = [];
   p.speak('Searching', reason => results.push('search:' + reason));
   p.speak('Found the cup', reason => results.push('found:' + reason), {priority:'found'});
   p.speak('Grasp instructions');
   p.speak('Move left', undefined, {priority:'guidance'});
-  assert.deepEqual(results, ['search:cancelled']);
-  assert.deepEqual(utterances.map(u => u.text), ['Searching', 'Found the cup']);
+  assert.deepEqual(results, []);
+  assert.deepEqual(utterances.map(u => u.text), ['Searching']);
+  utterances[0].onend?.();
+  assert.deepEqual(results,['search:ended']);
   utterances[1].onend?.();
-  assert.deepEqual(results, ['search:cancelled', 'found:ended']);
+  assert.deepEqual(results, ['search:ended', 'found:ended']);
   assert.equal(utterances[2].text, 'Grasp instructions');
+  utterances[2].onend?.();assert.equal(utterances[3].text,'Move left');
 });
 
-test('discovery retries after safety rather than leaving a stale announcement queued', () => {
+test('discovery queued after a warning waits until the warning actually ends', () => {
   const p = player(); const results: string[] = [];
   p.speak('Warning', undefined, {priority:'safety'});
   p.speak('Found the cup', reason => results.push(reason), {priority:'found'});
-  assert.deepEqual(results, ['cancelled']);
+  assert.deepEqual(results, []);
   utterances[0].onend?.();
-  assert.equal(utterances.length, 1);
-  p.speak('Found the cup', undefined, {priority:'found'});
+  assert.equal(utterances.length, 2);
   assert.equal(utterances[1].text, 'Found the cup');
+  utterances[1].onend?.();assert.deepEqual(results,['ended']);
 });
 
-test('losing the target cancels discovery and resumes queued speech', () => {
+test('losing the target removes queued guidance but finishes the sentence already playing', () => {
   const p = player(); const results: string[] = [];
   p.speak('Found the cup', reason => results.push(reason), {priority:'found'});
   const staleEnd = utterances[0].onend;
   p.speak('Other notice');
+  let cancelled=false;
+  p.speak('Old direction',()=>{cancelled=true;},{priority:'guidance'});
   p.cancelGuidance();
+  assert.equal(cancelled,true);assert.equal(utterances.length,1);assert.deepEqual(results,[]);
   staleEnd?.();
-  assert.deepEqual(results, ['cancelled']);
+  assert.deepEqual(results, ['ended']);
   assert.equal(utterances[1].text, 'Other notice');
   assert.equal(p.isPrioritySpeaking(), true);
 });
@@ -211,6 +235,7 @@ test('cancellation settles once and old voice events cannot clear newer speech',
   const p = player(); const results: string[] = [];
   p.speak('이전 경고', reason => results.push(reason));
   const oldEnd = utterances[0].onend;
+  p.cancelSpeech();
   p.speak('새 안내', reason => results.push(reason),{priority:'safety'});
   assert.deepEqual(results,['cancelled']);
   oldEnd?.(); assert.equal(p.isPrioritySpeaking(),true);
@@ -246,9 +271,10 @@ test('safety is not interrupted by ordinary guidance and normal speech waits its
   p.speak('위험 안내',r=>finished.push('safety:'+r),{priority:'safety'});
   p.speak('일반 설명',r=>finished.push('normal:'+r));
   p.speak('지난 방향',r=>finished.push('guidance:'+r),{priority:'guidance'});
-  assert.equal(utterances.length,1);assert.deepEqual(finished,['guidance:cancelled']);
+  assert.equal(utterances.length,1);assert.deepEqual(finished,[]);
   utterances[0].onend?.();assert.equal(utterances[1].text,'일반 설명');
-  utterances[1].onend?.();assert.deepEqual(finished,['guidance:cancelled','safety:ended','normal:ended']);
+  utterances[1].onend?.();assert.deepEqual(finished,['safety:ended','normal:ended']);
+  assert.equal(utterances[2].text,'지난 방향');utterances[2].onend?.();assert.deepEqual(finished,['safety:ended','normal:ended','guidance:ended']);
 });
 test('recordings play before dynamic TTS; missing recordings fall through to TTS',async()=>{
   let generated=0,recordings=0;

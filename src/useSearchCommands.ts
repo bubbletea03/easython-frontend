@@ -62,14 +62,14 @@ export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, sel
   }
   function timeout() {
     resume();
-    cancel(); setOutcome('unknown');
+    cancel(false); setOutcome('unknown');
     setSession(s=>({...s,running:false,revision:s.revision+1}));
     const text = '이 주변에서는 찾지 못했어요. 다시 찾으려면 말하기 버튼을 눌러 주세요.';
     setMessage(text); speak(text,undefined,{clipId:'search_timeout'});
   }
   function unknown(text: string) {
     resume();
-    cancel(); setOutcome('unknown'); setSession(s => ({ ...s, running: false, revision: s.revision + 1 })); notify(text);
+    cancel(false); setOutcome('unknown'); setSession(s => ({ ...s, running: false, revision: s.revision + 1 })); notify(text);
   }
   function find(targets: string[], objectKo = '') {
     resume();
@@ -77,7 +77,7 @@ export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, sel
     if (!cleaned.length || cleaned.length > 10 || cleaned.some(t => !/^[a-z0-9][a-z0-9 '\-]{0,49}$/.test(t))) {
       notify('영어 물체 이름을 1개에서 10개까지 입력해 주세요.'); return;
     }
-    cancel(); setSession(s => ({ running: true, targets: cleaned, objectKo, revision: s.revision + 1 }));
+    cancel(false); setSession(s => ({ running: true, targets: cleaned, objectKo, revision: s.revision + 1 }));
     setOutcome('searching');
     const text=`${objectKo || cleaned.join(', ')} 찾을게요. 폰을 천천히 돌려주세요.`;
     setMessage(text);speak(text,undefined,{clipId:findRecordingId(objectKo)});
@@ -173,7 +173,7 @@ export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, sel
     if (chooseTarget?.current?.(trimmed)) { cancelPending();resume(); return; }
     if (!/안\s*잡|못\s*잡|잡지\s*않/.test(trimmed)&&/^(?:.+\s+)?잡았(?:어|어요|습니다)[.!?\s]*$/.test(trimmed)) {
       resume();
-      cancel(); setOutcome('done'); setSession(s => ({ ...s, running: false, revision: s.revision + 1 }));
+      cancel(false); setOutcome('done'); setSession(s => ({ ...s, running: false, revision: s.revision + 1 }));
       const token=generation.current;onComplete?.();
       notify('잡으셨군요. 안내를 마칠게요.',()=>{if(generation.current===token&&alive.current)setOutcome('idle');}); return;
     }
