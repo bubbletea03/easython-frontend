@@ -37,3 +37,13 @@ test('hand vertical guidance uses forward and toward the body, while phone align
   assert.equal(deriveScene({...found,direction:'down'}).title,'몸 쪽으로');
   assert.match(deriveScene({...found,centered:false,direction:'up'}).title,/폰을.*위쪽/);
 });
+
+test('the find, align and reach steps follow the scene, and scenes outside the flow have none', () => {
+  const running = {...idle,running:true};
+  assert.equal(deriveScene(running).step,1);
+  assert.equal(deriveScene({...running,lost:true}).step,1);
+  assert.equal(deriveScene({...running,found:true,centered:false,direction:'left'}).step,2);
+  assert.equal(deriveScene({...running,found:true,centered:true}).step,2);
+  assert.equal(deriveScene({...running,found:true,centered:true,guiding:true}).step,3);
+  for (const scene of [deriveScene(idle),deriveScene({...idle,listening:true}),deriveScene({...running,safety:'뜨거워요'}),deriveScene({...idle,outcome:'done'})]) assert.equal(scene.step,undefined);
+});

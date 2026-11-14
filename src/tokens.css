@@ -1,0 +1,76 @@
+/*
+ * Design tokens.
+ * Section 1 holds values read from the Figma style guide (MO_스타일가이드).
+ * Section 2 holds extensions made for this app; they are not Figma definitions.
+ */
+:root {
+  /* 1. Figma — Color (08. Color Guide) */
+  --color-brand: #2962ff;            /* Brand/Main_Color */
+  --color-brand-sub2: #00c853;       /* Brand/Sub_Color_2 */
+  --color-black: #111111;            /* BG/Black_Color, Font/02_black */
+  --color-white: #ffffff;            /* BG/White_Color, Font/01_White */
+  --color-font-sub: #505050;         /* Font/03_Sub */
+  --color-icon-black: #2a2a37;       /* Icon/02_black */
+  --color-line: #e5e5ec;             /* Line/Regular_Color */
+  --color-disabled: #a5adb8;         /* Button_Select_Input/Disable(예외) */
+  --color-blue-a100: #82b1ff;        /* System/Blue/A 100 */
+  --color-blue-800: #1565c0;         /* System/Blue/800 */
+  --color-red-700: #d32f2f;          /* System/Red/700(에러) */
+  --color-red-a200: #ff5252;         /* System/Red/A 200 */
+  --color-amber-a400: #ffab00;       /* System/Amber/A 400 */
+  --color-black-450: #2c2c2c;        /* System/Black/450 */
+  --black-85: rgb(17 17 17 / 85%);   /* Opacity/Black_85% */
+  --black-60: rgb(17 17 17 / 60%);   /* Opacity/Black_60% */
+  --black-50: rgb(17 17 17 / 50%);   /* Opacity/Black_50% */
+  --white-85: rgb(255 255 255 / 85%);/* Opacity/White_85% */
+  --white-60: rgb(255 255 255 / 60%);/* Opacity/White_60% */
+  --white-20: rgb(255 255 255 / 20%);/* Opacity/White_20% */
+  --white-15: rgb(255 255 255 / 15%);/* Opacity/White_15% */
+
+  /* 1. Figma — Typography (07. Typography Guide, MO scale). Tracking is -2.5%. */
+  --font-family: PretendardSub, Pretendard, system-ui, sans-serif;
+  --tracking: -0.025em;
+  --text-d1: 56px;  /* Display/D1 */
+  --text-h1: 32px;  /* Headline/H1 */
+  --text-h2: 28px;  /* Headline/H2 */
+  --text-h3: 24px;  /* Headline/H3 */
+  --text-h4: 20px;  /* Headline/H4 */
+  --text-h5: 18px;  /* Headline/H5 */
+  --text-h6: 16px;  /* Headline/H6 */
+  --text-b1: 15px;  /* Body/B1 */
+  --text-b2: 14px;  /* Body/B2 */
+  --text-b3: 13px;  /* Body/B3 */
+  --leading-display: 1.3;
+  --leading-headline: 1.4;
+  --leading-body: 1.45;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+
+  /* 1. Figma — Spacing (01. Spacing) */
+  --space-2: 2px; --space-4: 4px; --space-8: 8px; --space-12: 12px; --space-16: 16px;
+  --space-20: 20px; --space-24: 24px; --space-28: 28px; --space-32: 32px; --space-40: 40px; --space-48: 48px;
+
+  /* 1. Figma — Radius as used by components (Button 4 / Toast·Tooltip 8 / Bottom Sheet 20 / Round 100) */
+  --radius-4: 4px; --radius-8: 8px; --radius-20: 20px; --radius-round: 100px;
+
+  /* 1. Figma — Effects (21. Shadow Guide, Background Blur_6) */
+  --shadow-13: 2px 4px 12px rgb(17 17 17 / 13%);        /* Shadow/Shadow 13% */
+  --shadow-down-4: 0 8px 12px -1px rgb(35 48 59 / 10%); /* Shadow ↓/4 */
+  --blur-6: blur(3px);
+
+  /* 1. Figma — Button sizes (05. Button) */
+  --button-xl: 54px;
+
+  /* 2. Extensions for this app */
+  --ext-gutter: var(--space-16);
+  --ext-voice-button: 88px;          /* Only Icons / Round, enlarged from 54px for eyes-free use */
+  --ext-brand-press: #1f4fd6;        /* pressed brand surface */
+  --ext-tone-idle: var(--color-white);
+  --ext-tone-search: var(--color-blue-a100); /* brand blue is too dark for thin lines over video */
+  --ext-tone-found: var(--color-brand-sub2);
+  --ext-tone-lost: var(--color-amber-a400);
+  --ext-tone-danger: var(--color-red-a200);
+  --ext-motion-fast: 200ms;
+  --ext-motion-pulse: 1600ms;
+  --ext-ease: cubic-bezier(.2, 0, 0, 1);
+}

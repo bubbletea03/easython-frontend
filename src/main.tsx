@@ -1,8 +1,10 @@
 ﻿import { StrictMode, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import './tokens.css';
 import './style.css';
 import { useObjectDetection } from './useObjectDetection';
 import { HandOverlay } from './HandOverlay';
+import { GuideOverlay } from './GuideOverlay';
 import { fingerGuidance, projectBox, projectPoint } from './sceneGeometry';
 import { useSceneSpeech } from './useSceneSpeech';
 import { useBackendDetection } from './useBackendDetection';
@@ -168,6 +170,15 @@ function App() {
     return () => clearInterval(timer);
   }, [scene.state, direction, choicePrompt, Math.round((nearestHand?.distance ?? 0) * 10)]);
   useEffect(() => { if (scene.state === 'done') vibrate([80,60,80]); }, [scene.state]);
+  // One short pulse per transition, so the cue marks the change without competing with speech.
+  const feltState = useRef(scene.state);
+  const aligned = scene.state === 'guiding' && !scene.direction;
+  useEffect(() => {
+    const previous = feltState.current; feltState.current = scene.state;
+    if (scene.state === 'found' && ['searching','lost'].includes(previous)) vibrate(40);
+    else if (scene.state === 'lost' && previous !== 'lost') vibrate([30,50,30]);
+  }, [scene.state]);
+  useEffect(() => { if (aligned) vibrate(60); }, [aligned]);
   useEffect(() => {
     const notice = lossNotices.current.update(missingFor, lostSide, now,
       lost && !listening && !search.busy && !search.safety && !document.hidden && !isPrioritySpeaking(), foundVisible);
@@ -399,23 +410,20 @@ function App() {
   if (!started) return <StartScreen onStart={()=>{unlockFeedback();voiceUnlocked.current=true;search.start();setStarted(true);}} />;
   return <main className={`camera-screen scene-${scene.state}`}>
     <video ref={video} autoPlay muted playsInline aria-label="카메라 미리보기" />
-    <div className="detection-overlay" aria-hidden="true">
-      {current.filter(({ item }) => item.id !== primary?.item.id).map(({ item, rect }) => <div key={item.id} className="detection-box detection-secondary" style={{ left: rect.x, top: rect.y, width: rect.width, height: rect.height }} />)}
-      {primary && !lost && <div key={primary.item.id} className={`detection-box${primary.item.missing ? ' is-missing' : ''}`} style={{ left: primary.rect.x, top: primary.rect.y, width: primary.rect.width, height: primary.rect.height }}>
-        <i className="box-corner top-left" /><i className="box-corner top-right" /><i className="box-corner bottom-left" /><i className="box-corner bottom-right" />
-      </div>}
-    </div>
-    {handlePoint && (() => {
-      const point = projectPoint(handlePoint, source, screen);
-      if (point.x < 0 || point.y < 0 || point.x > screen.width || point.y > screen.height) return null;
-      return <div className={`handle-point${scene.state === 'guiding' ? ' guiding' : ''}`} style={{ left: point.x, top: point.y }} aria-label="서버가 추정한 잡을 위치">
-        {scene.state === 'guiding' && <><i className="target-halo" /><i className="target-ring" /></>}
-        <span>{primary?.item.label === '컵' ? '손잡이' : '잡을 위치'}</span>
-      </div>;
-    })()}
+    <GuideOverlay state={scene.state} viewport={viewport} centered={centered} lostSide={scene.lostSide}
+      target={primary && !lost ? { rect: primary.rect, missing: primary.item.missing } : undefined}
+      others={current.filter(({ item }) => item.id !== primary?.item.id).map(({ rect }) => rect)}
+      hand={handPoint} destination={destination} gap={nearestHand?.distance} aligned={aligned}
+      handle={(() => {
+        if (!handlePoint) return undefined;
+        const point = projectPoint(handlePoint, source, screen);
+        if (point.x < 0 || point.y < 0 || point.x > screen.width || point.y > screen.height) return undefined;
+        return { point, label: primary?.item.label === '컵' ? '손잡이' : '잡을 위치' };
+      })()} />
     {targeted && !lost && <HandOverlay hands={hands} source={source} viewport={screen} />}
-    <CameraHUD scene={choicePrompt && !search.safety ? {...scene,title:choicePrompt,detail:'왼쪽 또는 오른쪽이라고 말씀해 주세요.',direction:undefined} : scene} heard={voiceMessage} active={session.running} pending={search.busy} onVoice={toggleVoice} onStop={stop} />
-    {handsFreeError && <p className="handsfree-error" role="status">{handsFreeError}</p>}
+    <CameraHUD scene={choicePrompt && !search.safety ? {...scene,title:choicePrompt,detail:'왼쪽 또는 오른쪽이라고 말씀해 주세요.',direction:undefined} : scene} choosing={!!choicePrompt && !search.safety}
+      heard={voiceMessage} active={session.running} pending={search.busy} handsFree={voiceDiagnostics.state === 'listening'} onVoice={toggleVoice} onStop={stop} />
+    {handsFreeError && <p className="hud-toast" role="status">{handsFreeError}</p>}
     {dev && <aside className="dev-panel" aria-label="개발 정보">
       <b>개발 정보</b>
       <p>{backend.status}</p><p>{handMessage}</p><p>{detectionMessage}</p>
