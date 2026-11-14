@@ -4,9 +4,9 @@ import { vibrate, phoneCue } from './audioFeedback';
 import type { PhaseNotice } from './phoneGuidance';
 import { foundRecordingId } from './recordedSpeech';
 
-export function useSceneSpeech(target: { id: number; label: string } | undefined, guidance: string, listening: boolean, revision: number, lost: boolean, detail?: string, phone = false, reach = true, graspAligned = false, clipId?: string, graspTip?: string,phaseNotice?:PhaseNotice) {
-  const latest = useRef({ target, guidance, listening, lost, detail, phone, reach, graspAligned, clipId, graspTip,phaseNotice });
-  latest.current = { target, guidance, listening, lost, detail, phone, reach, graspAligned, clipId, graspTip,phaseNotice };
+export function useSceneSpeech(target: { id: number; label: string } | undefined, guidance: string, listening: boolean, revision: number, lost: boolean, detail?: string, phone = false, reach = true, graspAligned = false, clipId?: string, graspTip?: string,phaseNotice?:PhaseNotice,onAlignedEnd?:()=>void) {
+  const latest = useRef({ target, guidance, listening, lost, detail, phone, reach, graspAligned, clipId, graspTip,phaseNotice,onAlignedEnd });
+  latest.current = { target, guidance, listening, lost, detail, phone, reach, graspAligned, clipId, graspTip,phaseNotice,onAlignedEnd };
   useEffect(() => {
     let announced = false, announcing = false, felt = false;
     let visibleSince: number | undefined;
@@ -72,6 +72,7 @@ export function useSceneSpeech(target: { id: number; label: string } | undefined
       lastText = text; lastSpokenAt = now; spokenAt.set(text, now);
       if (isPhone) lastPhoneAt = now;
       const pauseAfter = latest.current.graspAligned;
+      const finishAlignment=latest.current.onAlignedEnd;
       if(isPhone)phoneCue();
       if(pauseAfter&&!alignedFelt){alignedFelt=true;vibrate(80);}
       speak(text, reason => {
@@ -79,9 +80,9 @@ export function useSceneSpeech(target: { id: number; label: string } | undefined
           lastText = ''; spokenAt.delete(text);
           if (isPhone) lastPhoneAt = -Infinity;
         } else if (pauseAfter) lastText = '';
-        if(reason==='ended'&&pauseAfter)alignedAnnounced=true;
+        if(reason==='ended'&&pauseAfter){alignedAnnounced=true;finishAlignment?.();}
         if (reason === 'ended') lastSpokenAt = performance.now();
-      }, {priority:'guidance', clipId:latest.current.clipId, quietAfterMs:pauseAfter ? 5000 : undefined,
+      }, {priority:'guidance', clipId:latest.current.clipId, quietAfterMs:pauseAfter&&!finishAlignment ? 5000 : undefined,
         isRelevant:()=>latest.current.guidance===text&&!latest.current.listening&&!!latest.current.target});
     }, 100);
     return () => { clearInterval(timer); cancelGuidance(); };

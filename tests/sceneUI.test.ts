@@ -15,8 +15,9 @@ test('search, found, guiding and lost use real scene data', () => {
   assert.equal(guide.title,'왼쪽으로');
   const overlap=deriveScene({...idle,running:true,found:true,guiding:true});
   assert.equal(overlap.state,'guiding');
-  assert.equal(overlap.title,'거기예요. 그대로 쭉 뻗어 잡으세요');
-  assert.match(overlap.detail!,/버튼을 누르고 잡았어/);
+  assert.equal(overlap.title,'거기예요');
+  assert.equal(overlap.detail,'아직 닿지 않았다면 손을 조금 더 뻗어 보세요.');
+  assert.doesNotMatch(overlap.detail!,/버튼|잡았/);
   assert.doesNotMatch(overlap.title,/잡았어요|잡으셨/);
   assert.equal(deriveScene({...idle,running:true,lost:true,lostSide:'right'}).lostSide,'right');
 });

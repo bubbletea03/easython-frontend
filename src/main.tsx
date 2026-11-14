@@ -129,7 +129,7 @@ function App() {
     session.revision, lost, undefined, !handPhase, handPhase, scene.state === 'guiding' && !scene.direction,
     scene.state === 'guiding' && scene.direction ? {left:'move_left',right:'move_right',up:'move_forward',down:'move_back'}[scene.direction]
       : scene.state === 'found' && alignmentDirection && ['left','right'].includes(alignmentDirection) ? `align_${alignmentDirection}` : undefined,
-    scene.state === 'guiding' && search.graspTip?.targetId === primary?.item.id ? search.graspTip?.text : undefined,phase.notice);
+    scene.state === 'guiding' && search.graspTip?.targetId === primary?.item.id ? search.graspTip?.text : undefined,phase.notice,()=>search.finishGuidance(session.revision));
 
   useEffect(()=>{
     if(!session.running||search.paused||listening||search.busy||!foundVisible||!waitingHandle||document.hidden){
@@ -245,6 +245,7 @@ function App() {
   },[]);
   useEffect(()=>{voiceSession.current?.dispose();},[session.revision]);
   function toggleVoice() {
+    if(!listening&&(session.running||search.busy||search.paused)){stop();return;}
     if (voiceSession.current) { voiceSession.current.stop(); return; }
     unlockFeedback();
     const afterStop=session.running || search.busy || search.paused;
@@ -367,7 +368,7 @@ function App() {
       </div>;
     })()}
     {targeted && !lost && <HandOverlay hands={hands} source={source} viewport={screen} />}
-    <CameraHUD scene={displayedScene} heard={voiceMessage} active={session.running&&!search.paused} pending={search.busy} onVoice={toggleVoice} />
+    <CameraHUD scene={displayedScene} heard={voiceMessage} active={session.running} pending={search.busy} onVoice={toggleVoice} onStop={stop} />
     {announcement?.status==='error'&&<p className="handsfree-error" role="status">안내 소리가 멈췄어요. 다음 안내는 기다리고 있어요. 버튼을 눌러 다시 요청해 주세요.</p>}
     {dev && <aside className="dev-panel" aria-label="개발 정보">
       <b>개발 정보</b>

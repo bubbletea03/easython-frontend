@@ -13,20 +13,20 @@ const compile = (path:string, name:string, dependencies: Record<string,unknown>)
 };
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
 
-test('the button uses one-shot voice input in both active and idle states', () => {
+test('the button stops active searches and listens only while idle', () => {
   const CameraHUD=compile('../src/CameraHUD.tsx','CameraHUD',{React,designIcons:{mic:'',stop:'',listening:''}});
   const buttons=(node:any):any[]=>Array.isArray(node)?node.flatMap(buttons):React.isValidElement(node)?[(node.type==='button'?node:undefined),...buttons((node.props as any).children)].filter(Boolean):[];
   for(const state of ['found','guiding','processing','warning']) {
     let stopped=0,heard=0;
     const props={scene:{state,title:'Test',status:'Test'},heard:'',active:state!=='processing',pending:state==='processing',onStop(){stopped++;},onVoice(){heard++;}};
     const html=renderToStaticMarkup(React.createElement(CameraHUD,props));
-    assert.match(html,/aria-label="안내를 멈추고 말하기/);
+    assert.match(html,/aria-label="그만\. 탐색과 안내를 멈춥니다/);
     assert.doesNotMatch(html,/stop-button/);
     assert.doesNotMatch(html,/disabled/);
     const controls=buttons(CameraHUD(props));assert.equal(controls.length,1);
-    controls[0].props.onClick();assert.equal(stopped,0);assert.equal(heard,1);
+    controls[0].props.onClick();assert.equal(stopped,1);assert.equal(heard,0);
     const idle={...props,active:false,pending:false,scene:{state:'idle',title:'Ready',status:'Ready'}};
-    buttons(CameraHUD(idle))[0].props.onClick();assert.equal(heard,2);
+    buttons(CameraHUD(idle))[0].props.onClick();assert.equal(heard,1);
     assert.match(renderToStaticMarkup(React.createElement(CameraHUD,idle)),/aria-label="말하기/);
   }
 });
@@ -267,6 +267,45 @@ test('the aligned-position prompt is spoken and vibrates once even after leaving
     render(true);tick(13000);tick(14000);
     assert.equal(spoken.filter(text=>text==='Reached prompt').length,1);assert.equal(vibrations.filter(value=>value===80).length,1);
   }finally{cleanup?.();for(const[key,descriptor]of Object.entries(original)){if(descriptor)Object.defineProperty(globalThis,key,descriptor);else Reflect.deleteProperty(globalThis,key);}}
+});
+
+test('alignment ends the search only after the final prompt finishes playing',context=>{
+  const original=Object.fromEntries(['window','document'].map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
+  let now=0,poll=()=>{},busy=false,active:((reason:string)=>void)|undefined,stops=0;
+  let cleanup:(()=>void)|undefined;
+  Object.assign(globalThis,{window:{setInterval:(callback:()=>void)=>{poll=callback;return 1;}},document:{hidden:false}});
+  context.mock.method(performance,'now',()=>now);context.mock.method(globalThis,'clearInterval',()=>{});
+  const spoken:string[]=[];
+  const hook=compile('../src/useSceneSpeech.ts','useSceneSpeech',{
+    useRef:(current:unknown)=>({current}),useEffect:(effect:()=>()=>void)=>{cleanup=effect();},
+    speak:(text:string,callback:(reason:string)=>void,options:any)=>{spoken.push(text);active=callback;busy=true;assert.equal(options.quietAfterMs,undefined);},
+    cancelGuidance(){},isPrioritySpeaking:()=>busy,isSpeechPaused:()=>false,vibrate(){},phoneCue(){},foundRecordingId:()=>undefined,
+  });
+  const tick=(time:number)=>{now=time;poll();};
+  const finish=(reason:string)=>{busy=false;active?.(reason);};
+  try{
+    hook({id:1,label:'cup'},'Final reach prompt',false,1,false,undefined,false,true,true,undefined,undefined,undefined,()=>stops++);
+    tick(0);tick(1000);finish('ended');tick(2500);
+    assert.equal(spoken.at(-1),'Final reach prompt');assert.equal(stops,0);
+    tick(10000);assert.equal(stops,0);
+    finish('cancelled');assert.equal(stops,0);
+    tick(12000);finish('error');assert.equal(stops,0);
+    tick(16000);finish('ended');assert.equal(stops,1);
+    tick(20000);assert.equal(stops,1);
+  }finally{cleanup?.();for(const[key,descriptor]of Object.entries(original)){if(descriptor)Object.defineProperty(globalThis,key,descriptor);else Reflect.deleteProperty(globalThis,key);}}
+});
+
+test('finishing alignment silently stops only its own search session',()=>{
+  const states:any[]=[],spoken:string[]=[];let cancelled=0;
+  const hook=compile('../src/useSearchCommands.ts','useSearchCommands',{
+    useRef:(current:unknown)=>({current}),
+    useState:(value:any)=>{const i=states.length;const initial=i===0?{running:true,targets:['cup'],objectKo:'cup',revision:1}:value;states.push(initial);return[initial,(next:any)=>{states[i]=typeof next==='function'?next(states[i]):next;}];},
+    useEffect(){},createAutoGripGate:()=>({reset(){}}),speak:(text:string)=>spoken.push(text),cancelSpeech(){cancelled++;},
+  });
+  const commands=hook({current:{}},{current:undefined},{current:true},{current:true});
+  commands.finishGuidance(0);assert.equal(states[0].running,true);assert.equal(cancelled,0);
+  commands.finishGuidance(1);assert.equal(states[0].running,false);assert.equal(states[0].revision,2);
+  assert.equal(states[1],'idle');assert.equal(states[3],'');assert.equal(cancelled,1);assert.deepEqual(spoken,[]);
 });
 
 test('urgent handle checks bypass the automatic delay, preserve sharp metadata, and do not duplicate requests',async context=>{

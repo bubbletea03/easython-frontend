@@ -49,10 +49,12 @@ export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, sel
     setGraspTip(undefined);
     if (stopSpeech) cancelSpeech();
   }
-  function stop() {
+  function stop(announce=true) {
     resume();
-    cancel(); setOutcome('idle'); setSession(s => ({ ...s, running: false, revision: s.revision + 1 })); notify('안내를 멈췄어요.');
+    cancel(); setOutcome('idle'); setSession(s => ({ ...s, running: false, revision: s.revision + 1 }));
+    if(announce)notify('안내를 멈췄어요.');else setMessage('');
   }
+  function finishGuidance(expectedRevision:number){if(latestSession.current.running&&latestSession.current.revision===expectedRevision)stop(false);}
   function start() {
     resume();
     cancel();
@@ -207,5 +209,5 @@ export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, sel
     const timer = setTimeout(() => setSafety(undefined), 5000);
     return () => clearTimeout(timer);
   }, [safety]);
-  return { session, message, busy, handlePoint, graspTip, hazard, paused, safety, outcome, command, start, stop, pause, find, describe, requestHandle, cancelPending, timeout };
+  return { session, message, busy, handlePoint, graspTip, hazard, paused, safety, outcome, command, start, stop, finishGuidance,pause, find, describe, requestHandle, cancelPending, timeout };
 }
