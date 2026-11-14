@@ -11,11 +11,12 @@ import type { DetectionTrack } from './detectionTracks';
 import { CameraHUD, StartScreen } from './CameraHUD';
 import { deriveScene, screenDirection } from './sceneUI';
 import { unlockFeedback, listeningCue, guideCue, vibrate } from './audioFeedback';
-import { speak, cancelSpeech, isPrioritySpeaking } from './speech';
+import { speak, cancelSpeech, isPrioritySpeaking, getSpeechLog } from './speech';
 import { followHandlePoint } from './gripGeometry';
 import { createPhoneLossNoticeGate, handOccludesTarget, lostDirection, gridAlignment } from './phoneGuidance';
 import { useWakeLock } from './useWakeLock';
 import { foundRecordingId, findRecordingId, preloadRecordings } from './recordedSpeech';
+import { createTargetLock, createTargetChoiceGate } from './targetLock';
 
 type VoiceRecognition = {
   lang: string;
@@ -53,10 +54,15 @@ function App() {
   useWakeLock(cameraReady);
   const [viewport, setViewport] = useState({ width: 1, height: 1 });
   const selected = useRef<DetectionTrack | undefined>(undefined);
+  const targetLock = useRef(createTargetLock());
+  const targetChoices = useRef(createTargetChoiceGate());
+  const [choicePrompt,setChoicePrompt] = useState<string>();
+  const [,refreshChoice] = useState(0);
+  const chooseTarget = useRef<((text:string)=>boolean) | undefined>(undefined);
   const descriptionCapability = useRef<boolean | undefined>(undefined);
   const autoDescribeEnabled = useRef(false);
   const position = useRef<{text:string;clipId?:string} | undefined>(undefined);
-  const search = useSearchCommands(video, selected, descriptionCapability, autoDescribeEnabled, position);
+  const search = useSearchCommands(video, selected, descriptionCapability, autoDescribeEnabled, position, chooseTarget);
   const { session } = search;
   const backend = useBackendDetection(video, cameraReady, session.running, session.targets, session.objectKo, session.revision);
   descriptionCapability.current = backend.describeEnabled;
@@ -71,7 +77,13 @@ function App() {
   const visible = detections.map(item => ({ item, rect: projectBox(item, source, screen) }))
     .filter(({ rect }) => rect.width > 0 && rect.height > 0);
   const current = visible.filter(({ item }) => !item.missing);
-  const primary = (current.length ? current : visible).sort((a,b) => b.rect.width * b.rect.height - a.rect.width * a.rect.height)[0];
+  const primary = targetLock.current.update(visible, now, viewport, session.revision);
+  chooseTarget.current = text => {
+    const choice = targetChoices.current.answer(text,current);
+    if (!choice) return false;
+    targetLock.current.choose(choice.target.item.id); setChoicePrompt(undefined); refreshChoice(value=>value+1);
+    speak(`${choice.side} 물건으로 안내할게요.`); return true;
+  };
   selected.current = primary?.item;
   const guideRect = primary?.rect ?? (lastSeen.current ? projectBox(lastSeen.current.item, source, screen) : undefined);
   const nearestHand = guideRect ? hands.map(hand => {
@@ -108,10 +120,11 @@ function App() {
     clipId: alignmentDirection === 'left' ? 'pos_left' : alignmentDirection === 'right' ? 'pos_right' : !alignmentDirection ? 'pos_center' : undefined,
   } : undefined;
   useSceneSpeech(targeted ? foundVisible ? primary!.item : occluded ? lastSeen.current?.item : undefined : undefined,
-    scene.state === 'guiding' ? `${scene.title}. ${scene.detail || ''}` : scene.state === 'found' ? phoneText : '', listening || search.busy || !!search.safety,
+    scene.state === 'guiding' ? `${scene.title}. ${scene.detail || ''}` : scene.state === 'found' ? phoneText : '', listening || search.busy || !!search.safety || !!choicePrompt,
     session.revision, lost, centered ? '물건이 가운데에 있어요. 이제 손을 뻗어 주세요.' : undefined, scene.state === 'found', centered, scene.state === 'guiding' && !scene.direction,
     scene.state === 'guiding' && scene.direction ? {left:'move_left',right:'move_right',up:'move_forward',down:'move_back'}[scene.direction]
-      : scene.state === 'found' && alignmentDirection && ['left','right'].includes(alignmentDirection) ? `align_${alignmentDirection}` : undefined);
+      : scene.state === 'found' && alignmentDirection && ['left','right'].includes(alignmentDirection) ? `align_${alignmentDirection}` : undefined,
+    scene.state === 'guiding' && search.graspTip?.targetId === primary?.item.id ? search.graspTip?.text : undefined);
 
 
   useEffect(() => {
@@ -119,12 +132,24 @@ function App() {
     const hash = () => setDev(location.hash === '#dev'); window.addEventListener('hashchange', hash);
     return () => { clearInterval(timer); window.removeEventListener('hashchange', hash); };
   }, []);
-  useEffect(() => { lastSeen.current = undefined; lossNotices.current.reset(); searchStarted.current = performance.now(); lastSearchHint.current = performance.now(); }, [session.revision]);
+  useEffect(() => { lastSeen.current = undefined; lossNotices.current.reset(); searchStarted.current = performance.now(); lastSearchHint.current = performance.now(); setChoicePrompt(undefined); }, [session.revision]);
+  useEffect(() => {
+    const event = targetChoices.current.update(current,now,session.revision,
+      session.running && targeted && !listening && !search.busy && !search.safety && !document.hidden && !isPrioritySpeaking());
+    if (event?.type === 'ask') {
+      const text = '같은 물건이 두 개 보여요. 왼쪽과 오른쪽 중 어느 쪽인가요?';
+      setChoicePrompt(text);
+      speak(text,()=>targetChoices.current.startDeadline(performance.now()));
+    } else if (event?.type === 'choose') {
+      targetLock.current.choose(event.target.item.id); setChoicePrompt(undefined); refreshChoice(value=>value+1);
+      speak(`${event.side} 물건으로 안내할게요.`);
+    } else if (event?.type === 'dismiss') setChoicePrompt(undefined);
+  }, [now,session.revision,session.running,listening,search.busy,search.safety,targeted]);
   useEffect(() => {
     if (primary && !primary.item.missing) lastSeen.current = { at: primary.item.lastSeen, x: (primary.rect.x + primary.rect.width / 2) / viewport.width, item: primary.item };
   }, [primary?.item.lastSeen, primary?.item.id]);
   useEffect(() => {
-    if (!targeted || scene.state !== 'guiding' || !nearestHand) return;
+    if (!targeted || choicePrompt || scene.state !== 'guiding' || !nearestHand) return;
     let last = 0;
     const timer = setInterval(() => {
       if (document.hidden || isPrioritySpeaking() || window.speechSynthesis?.speaking || window.speechSynthesis?.pending) return;
@@ -133,7 +158,7 @@ function App() {
       if (timestamp - last >= interval) { guideCue(direction === 'left' ? -1 : direction === 'right' ? 1 : 0); last = timestamp; }
     }, 100);
     return () => clearInterval(timer);
-  }, [scene.state, direction, Math.round((nearestHand?.distance ?? 0) * 10)]);
+  }, [scene.state, direction, choicePrompt, Math.round((nearestHand?.distance ?? 0) * 10)]);
   useEffect(() => { if (scene.state === 'done') vibrate([80,60,80]); }, [scene.state]);
   useEffect(() => {
     const notice = lossNotices.current.update(missingFor, lostSide, now,
@@ -380,11 +405,14 @@ function App() {
       </div>;
     })()}
     {targeted && !lost && <HandOverlay hands={hands} source={source} viewport={screen} />}
-    <CameraHUD scene={scene} heard={voiceMessage} active={session.running} onVoice={toggleVoice} onStop={stop} />
+    <CameraHUD scene={choicePrompt && !search.safety ? {...scene,title:choicePrompt,detail:'왼쪽 또는 오른쪽이라고 말씀해 주세요.',direction:undefined} : scene} heard={voiceMessage} active={session.running} onVoice={toggleVoice} onStop={stop} />
     {dev && <aside className="dev-panel" aria-label="개발 정보">
       <b>개발 정보</b>
       <p>{backend.status}</p><p>{handMessage}</p><p>{detectionMessage}</p>
       <p>{primary ? `${primary.item.label} · 신뢰도 ${Math.round(primary.item.score * 100)}%` : '탐지 없음'}</p>
+      {primary && <p>실제 이름: {primary.item.name || '로컬 탐지'} · 정확 일치: {primary.item.exact ? '예' : '아니요'}</p>}
+      <b>최근 음성 종료 기록</b>
+      <ol>{getSpeechLog().map((entry,index)=><li key={`${entry.at}-${index}`}>{entry.reason} · {entry.text}<small>{entry.caller}</small></li>)}</ol>
       <p>{guidance}</p><p>{search.message}</p>
       <button type="button" onClick={backend.reconnect}>서버 재연결</button>
       <button type="button" disabled={!primary || search.busy || backend.describeEnabled === false} onClick={() => { void search.describe(); }}>잡는 방법 확인</button>

@@ -3,15 +3,16 @@ import { isPrioritySpeaking, isSpeechPaused, speak, cancelGuidance } from './spe
 import { vibrate } from './audioFeedback';
 import { foundRecordingId } from './recordedSpeech';
 
-export function useSceneSpeech(target: { id: number; label: string } | undefined, guidance: string, listening: boolean, revision: number, lost: boolean, detail?: string, phone = false, reach = true, graspAligned = false, clipId?: string) {
-  const latest = useRef({ target, guidance, listening, lost, detail, phone, reach, graspAligned, clipId });
-  latest.current = { target, guidance, listening, lost, detail, phone, reach, graspAligned, clipId };
+export function useSceneSpeech(target: { id: number; label: string } | undefined, guidance: string, listening: boolean, revision: number, lost: boolean, detail?: string, phone = false, reach = true, graspAligned = false, clipId?: string, graspTip?: string) {
+  const latest = useRef({ target, guidance, listening, lost, detail, phone, reach, graspAligned, clipId, graspTip });
+  latest.current = { target, guidance, listening, lost, detail, phone, reach, graspAligned, clipId, graspTip };
   useEffect(() => {
     let announced = false, announcing = false, felt = false;
     let visibleSince: number | undefined;
     let candidate = '', candidateSince = 0, lastText = '', lastSpokenAt = -Infinity;
     let lastPhoneAt = -Infinity;
     let reachAnnounced = false, reaching = false;
+    let graspAnnounced = false, graspSpeaking = false;
     let previousReach = latest.current.reach;
     let reachSince: number | undefined;
     const spokenAt = new Map<string, number>();
@@ -46,6 +47,14 @@ export function useSceneSpeech(target: { id: number; label: string } | undefined
       if (canReach && extra && !reachAnnounced && !reaching && reachSince !== undefined && now-reachSince >= 500 && now-lastSpokenAt >= 1500 && !isPrioritySpeaking()) {
         reaching = true; lastSpokenAt = now;
         speak(extra, reason => { reaching = false; if (reason === 'ended') reachAnnounced = true; }, {priority:'guidance',clipId:'reach_out'});
+        return;
+      }
+      if (canReach && reachAnnounced && !isPhone && latest.current.graspTip && !graspAnnounced && !graspSpeaking && now-lastSpokenAt >= 1500 && !isPrioritySpeaking()) {
+        graspSpeaking = true; lastSpokenAt = now;
+        speak(latest.current.graspTip, reason => {
+          graspSpeaking = false;
+          if (reason === 'ended') { graspAnnounced = true; lastSpokenAt = performance.now(); }
+        }, {priority:'guidance'});
         return;
       }
       if (!text || (isPhone ? now-lastPhoneAt < 6000 : text === lastText) || now - candidateSince < 500 || now - lastSpokenAt < 1500 || now - (spokenAt.get(text) ?? -Infinity) < 3000 || isPrioritySpeaking()) return;

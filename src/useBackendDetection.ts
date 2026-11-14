@@ -80,7 +80,8 @@ export function useBackendDetection(video: RefObject<HTMLVideoElement | null>, c
             if (controller.signal.aborted || frameController.signal.aborted || document.hidden) continue;
             failures = 0;
             const results = response.detections.filter(d => !isPersonLabel(d.label) && !isPersonLabel(d.target));
-            const items = results.filter(d => d.score >= .35).map(d => ({label:objectKo || labels[d.target] || labels[d.label] || d.label,
+            const items = results.filter(d => d.score >= .5).map(d => ({label:objectKo || labels[d.target] || labels[d.label] || d.label,
+              name:d.label,exact:d.label===d.target,
               score:d.score,x:d.box.x,y:d.box.y,width:d.box.w,height:d.box.h}));
             tracks = updateTracks(tracks,items,performance.now(),()=>nextId.current++,3000);
             setDetections(tracks);

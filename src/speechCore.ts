@@ -1,6 +1,7 @@
 export type SpeechEndReason = 'ended' | 'cancelled' | 'error' | 'timeout';
 export type SpeechOptions = {priority?: 'guidance' | 'normal' | 'found' | 'safety'; clipId?:string; maxDurationMs?:number; quietAfterMs?:number};
 type Job = {text:string; onFinish?: (reason:SpeechEndReason)=>void; options:SpeechOptions};
+export type SpeechLogEntry = {at:number;text:string;reason:SpeechEndReason;priority:number;caller?:string};
 const speechPriority = (options: SpeechOptions) => options.priority === 'safety' ? 3 : options.priority === 'found' ? 2 : options.priority === 'guidance' ? 0 : 1;
 
 export function createSpeechPlayer(tts: (text: string, signal: AbortSignal) => Promise<Blob>, recording?: (text:string, id:string|undefined, signal:AbortSignal)=>Promise<Blob|undefined>) {
@@ -17,6 +18,8 @@ export function createSpeechPlayer(tts: (text: string, signal: AbortSignal) => P
   let quietUntil = 0;
   const ttsCache = new Map<string, Blob>();
   let cachedBytes = 0;
+  let currentText: string | undefined;
+  const speechLog: SpeechLogEntry[] = [];
   const isSpeechPaused = () => performance.now() < quietUntil;
 
   function resumeQueue() {
@@ -24,6 +27,13 @@ export function createSpeechPlayer(tts: (text: string, signal: AbortSignal) => P
   }
 
   function releaseCurrent(reason: SpeechEndReason) {
+    if (currentText) {
+      const caller = new Error().stack?.split('\n')[2]?.trim();
+      speechLog.push({at:performance.now(),text:currentText,reason,priority:activePriority,caller});
+      if (speechLog.length > 5) speechLog.shift();
+      if (window.location?.hash === '#dev') console.log('[speech] release',reason,currentText,caller);
+      currentText = undefined;
+    }
     generation++;
     const done = completion; completion = undefined;
     clearTimeout(watchdog); watchdog = undefined;
@@ -44,6 +54,7 @@ export function createSpeechPlayer(tts: (text: string, signal: AbortSignal) => P
   function start({text,onFinish,options}:Job) {
     if (!text.trim()) { onFinish?.('ended'); return; }
     const token = generation;
+    currentText = text;
     completion = onFinish;
     activePriority = speechPriority(options);
     const duration = options.maxDurationMs ?? 60000;
@@ -119,6 +130,7 @@ export function createSpeechPlayer(tts: (text: string, signal: AbortSignal) => P
     setServerSpeechEnabled(enabled: boolean) { serverEnabled = enabled; },
     isPrioritySpeaking() { return isSpeechPaused() || performance.now() < priorityUntil; },
     isSpeechPaused,
+    getSpeechLog() { return speechLog.slice(); },
     cancelSpeech, speak,
     cancelGuidance() { if(activePriority === 0 || activePriority === 2) {
       releaseCurrent('cancelled');

@@ -155,3 +155,36 @@ test('the hand worker survives search, target, and server/local switches', () =>
     }
   }
 });
+
+test('automatic grasp tip waits for hand guidance and is spoken once after the reach prompt', async context => {
+  const original=Object.fromEntries(['window','document'].map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
+  let now=0,poll:()=>void=()=>{},busy=false,active:((reason:string)=>void)|undefined;
+  const spoken:string[]=[],refs:{current:unknown}[]=[];
+  let refIndex=0,cleanup:(()=>void)|undefined;
+  Object.assign(globalThis,{window:{setInterval:(callback:()=>void)=>{poll=callback;return 1;}},document:{hidden:false}});
+  context.mock.method(performance,'now',()=>now);
+  context.mock.method(globalThis,'clearInterval',()=>{});
+  const hook=compile('../src/useSceneSpeech.ts','useSceneSpeech',{
+    useRef:(value:unknown)=>{const i=refIndex++;return refs[i]??(refs[i]={current:value});},
+    useEffect:(effect:()=>()=>void)=>{cleanup??=effect();},
+    speak:(text:string,callback:(reason:string)=>void)=>{spoken.push(text);active=callback;busy=true;},
+    cancelGuidance:()=>{},isPrioritySpeaking:()=>busy,isSpeechPaused:()=>false,vibrate:()=>{},foundRecordingId:()=>undefined,
+  });
+  const render=(phone:boolean,tip:string)=>{refIndex=0;hook({id:1,label:'cup'},phone?'':'Move left',false,1,false,'Reach out',phone,true,false,undefined,tip);};
+  const tick=(t:number)=>{now=t;poll();};
+  const finish=(t:number)=>{now=t;busy=false;active?.('ended');};
+  try {
+    render(true,'Hold the handle');tick(0);tick(1000);finish(1100);
+    tick(2600);assert.equal(spoken.at(-1),'Reach out');finish(2700);
+    tick(4200);assert.equal(spoken.includes('Hold the handle'),false);
+    render(false,'Hold the handle');tick(4300);assert.equal(spoken.at(-1),'Hold the handle');finish(4400);
+    render(false,'Hold the body');tick(6000);finish(6100);tick(8000);
+    assert.equal(spoken.filter(text=>text==='Hold the handle').length,1);
+    assert.equal(spoken.includes('Hold the body'),false);
+  } finally {
+    cleanup?.();
+    for(const [key,descriptor] of Object.entries(original)) {
+      if(descriptor)Object.defineProperty(globalThis,key,descriptor);else Reflect.deleteProperty(globalThis,key);
+    }
+  }
+});

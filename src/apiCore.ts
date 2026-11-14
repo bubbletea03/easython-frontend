@@ -109,6 +109,7 @@ export function createApiClient(config: { baseUrl: string; apiKey: string; requi
     async describe(image: Blob, signal?: AbortSignal, target = '물건'): Promise<Description> {
       const form = new FormData(); form.append('image', image, 'capture.jpg');
       form.append('target', target.trim() || '물건');
+      form.append('prompt', `Describe the requested target ${JSON.stringify(target.trim() || '물건')} in this photo. Return JSON with confidence, hazard, safety, grasp, comment, handle_point. All sentences must be short, polite Korean. confidence is "low" only when you cannot tell whether the target object itself is in the photo. If the object is visible but the handle is not, keep confidence "high", set handle_point to null, and still give a short grasp sentence. handle_point is a visible grasp location in normalized image coordinates {x,y}, otherwise null. hazard must be hot (visible steam or boiling), spill (full drink), edge (table edge), broken (visible breakage), sharp (exposed blade), or null, based only on visible evidence. safety must be one short sentence only when hazard is present, otherwise null. Exclude generic cautions about screens, charging, and dropping. Never claim safe or not hot. grasp and comment must each be one short sentence.`);
       const b = await request('/describe', { method: 'POST', body: form }, signal, 45000);
       if (!record(b) || !(record(b.result) || Array.isArray(b.result))) throw invalid();
       return readDescription(b.result);

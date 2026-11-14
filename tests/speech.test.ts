@@ -38,6 +38,17 @@ function player(tts = async () => new Blob(['audio'],{type:'audio/mpeg'})) {
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
+test('speech diagnostics record the cancellation source and keep only five releases', () => {
+  const p = player();
+  p.speak('Old guidance',undefined,{priority:'guidance'});
+  p.speak('Warning',undefined,{priority:'safety'});
+  const cancelled=p.getSpeechLog()[0];
+  assert.equal(cancelled.text,'Old guidance');assert.equal(cancelled.reason,'cancelled');assert.ok(cancelled.caller);
+  utterances[1].onend?.();
+  for(let i=0;i<5;i++){p.speak(`Message ${i}`);utterances.at(-1)?.onend?.();}
+  assert.equal(p.getSpeechLog().length,5);assert.equal(p.getSpeechLog()[4].text,'Message 4');
+});
+
 test('alignment completion silences all speech for five seconds and discards stale queued notices', context => {
   let now = 1000;
   context.mock.method(performance, 'now', () => now);

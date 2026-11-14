@@ -70,7 +70,7 @@ test('parse sends text once; disabled describe capability is not a parse readine
 });
 test('describe reads nested result safely, prioritizes safety and never accepts arbitrary coordinates', async () => {
   const api = client(async (_url,init) => {
-    assert.equal((init?.body as FormData).has('prompt'),false);
+    assert.match(String((init?.body as FormData).get('prompt')),/confidence is "low" only when/);
     assert.equal((init?.body as FormData).get('target'),'리모컨');
     return response({ result: { hazard:'hot',safety:'뜨거워요.',grasp:'손잡이',comment:'컵',handle_point:{x:.8,y:.5} }, grasp:'wrong' });
   });

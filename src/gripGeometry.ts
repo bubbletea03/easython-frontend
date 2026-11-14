@@ -1,8 +1,8 @@
 import type { Point, Rect } from './sceneGeometry';
-export function relativeHandlePoint(point: Point, box: Rect) {
+export function relativeHandlePoint(point: Point, box: Rect, margin = 0) {
   if (box.width <= 0 || box.height <= 0) return undefined;
   const u = (point.x - box.x) / box.width, v = (point.y - box.y) / box.height;
-  return [u,v].every(n => Number.isFinite(n) && n >= 0 && n <= 1) ? {u,v} : undefined;
+  return [u,v].every(n => Number.isFinite(n) && n >= -margin && n <= 1+margin) ? {u,v} : undefined;
 }
 export function followHandlePoint(point: {u:number;v:number}, box: Rect): Point {
   return {x:box.x + point.u * box.width, y:box.y + point.v * box.height};

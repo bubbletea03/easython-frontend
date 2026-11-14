@@ -9,3 +9,4 @@ export const cancelSpeech = player.cancelSpeech;
 export const speak = player.speak;
 export const cancelGuidance = player.cancelGuidance;
 export const isSpeechPaused = player.isSpeechPaused;
+export const getSpeechLog = player.getSpeechLog;

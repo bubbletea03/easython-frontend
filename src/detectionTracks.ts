@@ -1,4 +1,4 @@
-export type DetectionBox = { label: string; score: number; x: number; y: number; width: number; height: number };
+export type DetectionBox = { label: string; name?: string; exact?: boolean; score: number; x: number; y: number; width: number; height: number };
 export type DetectionTrack = DetectionBox & { id: number; lastSeen: number; missing: boolean };
 export const TRACK_HOLD_MS = 650;
 
