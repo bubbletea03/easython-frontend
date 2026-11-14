@@ -1,4 +1,4 @@
-﻿import { StrictMode, useEffect, useRef, useState } from 'react';
+import { StrictMode, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { createRoot } from 'react-dom/client';
 import './style.css';
 import { useObjectDetection } from './useObjectDetection';
@@ -11,7 +11,8 @@ import type { DetectionTrack } from './detectionTracks';
 import { CameraHUD, StartScreen } from './CameraHUD';
 import { deriveScene, screenDirection } from './sceneUI';
 import { unlockFeedback, guideCue, phoneCue, stopFeedback, vibrate } from './audioFeedback';
-import { speak, cancelSpeech, isPrioritySpeaking, getSpeechLog, getPlaybackMode } from './speech';
+import { speak, cancelSpeech, isPrioritySpeaking, getSpeechLog, getPlaybackMode, getSpeechAnnouncement, subscribeSpeech } from './speech';
+import { createAnnouncementPresenter } from './announcementPresentation';
 import { followHandlePoint, bladeZone, createBladeWarningGate, SHARP_LABELS } from './gripGeometry';
 import { createPhoneLossNoticeGate, handOccludesTarget, lostDirection, createPhoneAlignmentGate, createGuidancePhase } from './phoneGuidance';
 import { useWakeLock } from './useWakeLock';
@@ -20,6 +21,8 @@ import { createTargetLock, createTargetChoiceGate } from './targetLock';
 import { createPushToTalk, type PushRecognizer } from './pushToTalkCore';
 
 function App() {
+  const announcement=useSyncExternalStore(subscribeSpeech,getSpeechAnnouncement,()=>undefined);
+  const announcementPresenter=useRef(createAnnouncementPresenter());
   const [started, setStarted] = useState(false);
   const [cameraAttempt, setCameraAttempt] = useState(0);
   const cameraFailure = useRef<{text:string;clipId:string} | undefined>(undefined);
@@ -345,7 +348,9 @@ function App() {
     setListening(false); search.stop(); setVoiceMessage(''); setVoiceError(undefined);
   }
   if (!started) return <StartScreen onStart={()=>{unlockFeedback();search.start();setStarted(true);}} />;
-  return <main className={`camera-screen scene-${scene.state}`}>
+  const liveScene=choicePrompt&&!effectiveSafety?{...scene,title:choicePrompt,detail:'버튼을 누르고 왼쪽 또는 오른쪽이라고 말씀해 주세요.',direction:undefined}:scene;
+  const displayedScene=announcementPresenter.current.update(liveScene,announcement);
+  return <main className={`camera-screen scene-${displayedScene.state}`}>
     <video ref={video} autoPlay muted playsInline aria-label="카메라 미리보기" />
     <div className="detection-overlay" aria-hidden="true">
       {current.filter(({ item }) => item.id !== primary?.item.id).map(({ item, rect }) => <div key={item.id} className="detection-box detection-secondary" style={{ left: rect.x, top: rect.y, width: rect.width, height: rect.height }} />)}
@@ -362,7 +367,8 @@ function App() {
       </div>;
     })()}
     {targeted && !lost && <HandOverlay hands={hands} source={source} viewport={screen} />}
-    <CameraHUD scene={choicePrompt && !effectiveSafety ? {...scene,title:choicePrompt,detail:'버튼을 누르고 왼쪽 또는 오른쪽이라고 말씀해 주세요.',direction:undefined} : scene} heard={voiceMessage} active={session.running&&!search.paused} pending={search.busy} onVoice={toggleVoice} />
+    <CameraHUD scene={displayedScene} heard={voiceMessage} active={session.running&&!search.paused} pending={search.busy} onVoice={toggleVoice} />
+    {announcement?.status==='error'&&<p className="handsfree-error" role="status">안내 소리가 멈췄어요. 다음 안내는 기다리고 있어요. 버튼을 눌러 다시 요청해 주세요.</p>}
     {dev && <aside className="dev-panel" aria-label="개발 정보">
       <b>개발 정보</b>
       <p>{backend.status}</p><p>{handMessage}</p><p>{detectionMessage}</p>

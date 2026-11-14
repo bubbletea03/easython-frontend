@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createSpeechPlayer } from '../src/speechCore.ts';
 import { deriveScene } from '../src/sceneUI.ts';
 import { createContinuousVoice, type ContinuousRecognizer } from '../src/continuousVoiceCore.ts';
+import {createAnnouncementPresenter} from '../src/announcementPresentation.ts';
 
 let utterances: FakeUtterance[];
 let audioInstances: FakeAudio[];
@@ -18,7 +19,8 @@ class FakeAudio {
   onpause: (() => void) | null = null;
   ended = false;
   constructor() { audioInstances.push(this); }
-  async play() {}
+  plays=0;
+  async play() {this.plays++;}
   pause() {} removeAttribute() {} load() {}
 }
 const original = Object.fromEntries(['window','document','Audio','SpeechSynthesisUtterance'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis,key)]));
@@ -86,13 +88,53 @@ test('unavailable Web Audio falls back to media playback and completion still re
   audioInstances[0].onended?.();assert.equal(ended,1);assert.equal(p.isPrioritySpeaking(),false);
 });
 
-test('unexpected Android audio pause releases speech immediately so direction guidance can retry',async()=>{
+test('unexpected audio pause resumes the same sentence and never starts the queued next guide',async()=>{
   const p=player();p.setServerSpeechEnabled(true);
   const reasons:string[]=[];
   p.speak('Move left',reason=>reasons.push(reason),{priority:'guidance'});await flush();
+  const id=p.getAnnouncement()?.id;p.speak('Move right');
   audioInstances[0].onpause?.();
-  assert.equal(p.isPrioritySpeaking(),false);assert.deepEqual(reasons,['cancelled']);
-  p.speak('Move left',undefined,{priority:'guidance'});await flush();assert.equal(audioInstances.length,2);
+  await flush();
+  assert.equal(p.isPrioritySpeaking(),true);assert.deepEqual(reasons,[]);
+  assert.equal(audioInstances.length,1);assert.equal(audioInstances[0].plays,2);assert.equal(p.getAnnouncement()?.id,id);
+  audioInstances[0].onended?.();await flush();assert.deepEqual(reasons,['ended']);assert.equal(audioInstances.length,2);
+});
+
+test('the displayed message stays attached to the playing voice until its ended event',()=>{
+  const p=player(),presenter=createAnnouncementPresenter();
+  const first=deriveScene({listening:false,busy:false,running:true,cameraReady:true,cameraError:false,message:'',outcome:'searching',targetLabel:'cup',found:true,lost:false,guiding:true,direction:'left',timedOut:false});
+  p.speak('Complete left instruction',undefined,{priority:'guidance'});
+  const card=presenter.update(first,p.getAnnouncement());
+  p.speak('Complete warning',undefined,{priority:'safety'});
+  const latest={...first,state:'warning' as const,title:'New warning',detail:'New model output'};
+  assert.equal(presenter.update(latest,p.getAnnouncement()),card);
+  assert.equal(card.title,'Complete left instruction');assert.equal(card.state,'guiding');assert.equal(card.detail,undefined);
+  utterances[0].onend?.();
+  const next=presenter.update(latest,p.getAnnouncement());assert.equal(next.title,'Complete warning');assert.equal(next.state,'warning');
+  p.cancelSpeech();assert.equal(presenter.update(first,p.getAnnouncement()),first);
+});
+
+test('missing synthesis start events do not time out speech that is actually speaking',context=>{
+  context.mock.timers.enable({apis:['setTimeout']});const p=player();
+  p.speak('Long sentence',undefined,{maxDurationMs:5000});p.speak('Next sentence');
+  Object.assign(window.speechSynthesis,{speaking:true});
+  context.mock.timers.tick(20000);assert.equal(utterances.length,1);assert.equal(p.getAnnouncement()?.text,'Long sentence');
+  utterances[0].onend?.();assert.equal(utterances[1].text,'Next sentence');
+});
+
+test('an externally interrupted browser voice retries its current text instead of moving to the next',async()=>{
+  const p=player();p.speak('First sentence');p.speak('Second sentence');const id=p.getAnnouncement()?.id;
+  (utterances[0].onerror as ((event:unknown)=>void))?.({error:'interrupted'});await flush();
+  assert.deepEqual(utterances.map(u=>u.text),['First sentence','First sentence']);assert.equal(p.getAnnouncement()?.id,id);
+  utterances[1].onend?.();assert.equal(utterances[2].text,'Second sentence');
+});
+
+test('failure after speech has started retains the current announcement and blocks all later guides',()=>{
+  const p=player();p.speak('Must finish first');utterances[0].onstart?.();p.speak('Must wait');
+  utterances[0].onerror?.();
+  assert.equal(utterances.length,1);assert.equal(p.getAnnouncement()?.text,'Must finish first');
+  assert.equal(p.getAnnouncement()?.status,'error');assert.equal(p.isPrioritySpeaking(),true);
+  p.cancelSpeech();assert.equal(p.getAnnouncement(),undefined);assert.equal(p.isPrioritySpeaking(),false);
 });
 
 test('browser TTS that never starts times out in four seconds instead of holding guidance for a minute',context=>{
