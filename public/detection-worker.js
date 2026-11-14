@@ -32,28 +32,10 @@ self.onmessage = async ({ data }) => {
   if (data.type === 'frame') {
     try {
       const result = detector ? detector.detectForVideo(data.frame, data.timestamp) : { detections: [] };
-      // Match the UI's largest visible box, including object-fit: cover cropping.
-      const viewportWidth = data.viewportWidth || data.frame.width;
-      const viewportHeight = data.viewportHeight || data.frame.height;
-      const scale = Math.max(viewportWidth / data.frame.width, viewportHeight / data.frame.height);
-      const offsetX = (data.frame.width * scale - viewportWidth) / 2;
-      const offsetY = (data.frame.height * scale - viewportHeight) / 2;
-      let largestArea = 0;
-      let personSelected = !!data.personSelected;
-      for (const detection of result.detections) {
-        const box = detection.boundingBox;
-        if (!box) continue;
-        const width = Math.max(0, Math.min(viewportWidth, (box.originX + box.width) * scale - offsetX)
-          - Math.max(0, box.originX * scale - offsetX));
-        const height = Math.max(0, Math.min(viewportHeight, (box.originY + box.height) * scale - offsetY)
-          - Math.max(0, box.originY * scale - offsetY));
-        if (width * height > largestArea) {
-          largestArea = width * height;
-          personSelected = detection.categories[0]?.categoryName === 'person';
-        }
-      }
       let hands = [];
-      if (handDetector && !personSelected) {
+      // Keep internal hand tracking available to reject hand-only person false
+      // positives. The UI still hides hands when a full person is selected.
+      if (handDetector) {
         try { hands = handDetector.detectForVideo(data.frame, data.timestamp).landmarks; }
         catch (error) {
           handDetector.close(); handDetector = undefined;

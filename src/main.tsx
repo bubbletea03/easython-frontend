@@ -13,6 +13,7 @@ import { CameraHUD, StartScreen } from './CameraHUD';
 import { deriveScene, screenDirection } from './sceneUI';
 import { unlockFeedback, listeningCue, guideCue, vibrate } from './audioFeedback';
 import { speak, cancelSpeech, isPrioritySpeaking } from './speech';
+import { isHandOnlyPerson } from './handObjectFilter';
 
 type VoiceRecognition = {
   lang: string;
@@ -50,9 +51,9 @@ function App() {
   descriptionCapability.current = backend.describeEnabled;
   autoDescribeEnabled.current = cameraReady && session.running && backend.active && !listening && !search.busy;
   const local = useObjectDetection(video, cameraReady, { enabled: session.running, objects: !backend.active,
-    targets: session.objectKo || session.targets !== DEFAULT_TARGETS ? session.targets : null,
-    personSelected: selected.current?.label === '사람' });
-  const detections = session.running ? (backend.active ? backend.detections : local.detections) : [];
+    targets: session.objectKo || session.targets !== DEFAULT_TARGETS ? session.targets : null });
+  const detections = session.running ? (backend.active ? backend.detections : local.detections)
+    .filter(item => !isHandOnlyPerson(item, local.hands)) : [];
   const { detectionMessage, hands, handMessage } = local;
   const source = { x: 0, y: 0, width: video.current?.videoWidth || 1, height: video.current?.videoHeight || 1 };
   const screen = { x: 0, y: 0, ...viewport };
@@ -267,7 +268,6 @@ function App() {
       {current.filter(({ item }) => item.id !== primary?.item.id).map(({ item, rect }) => <div key={item.id} className="detection-box detection-secondary" style={{ left: rect.x, top: rect.y, width: rect.width, height: rect.height }} />)}
       {primary && !lost && <div key={primary.item.id} className={`detection-box${primary.item.missing ? ' is-missing' : ''}`} style={{ left: primary.rect.x, top: primary.rect.y, width: primary.rect.width, height: primary.rect.height }}>
         <i className="box-corner top-left" /><i className="box-corner top-right" /><i className="box-corner bottom-left" /><i className="box-corner bottom-right" />
-        <span className="detection-label">{primary.item.label}</span>
       </div>}
     </div>
     {handlePoint && (() => {

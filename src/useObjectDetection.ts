@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useEffect, useState, type RefObject } from 'react';
 import type { Detection } from '@mediapipe/tasks-vision';
 import { updateTracks, TRACK_HOLD_MS, type DetectionBox, type DetectionTrack } from './detectionTracks';
 import type { NormalizedLandmark } from '@mediapipe/tasks-vision';
@@ -22,14 +22,12 @@ export const labels: Record<string, string> = {
 };
 
 export function useObjectDetection(video: RefObject<HTMLVideoElement | null>, cameraReady: boolean,
-  options: { enabled: boolean; objects: boolean; targets: string[] | null; personSelected: boolean }) {
+  options: { enabled: boolean; objects: boolean; targets: string[] | null }) {
   const [detections, setDetections] = useState<DetectionTrack[]>([]);
   const [message, setMessage] = useState('');
   const [hands, setHands] = useState<NormalizedLandmark[][]>([]);
   const [handMessage, setHandMessage] = useState('손 추적 준비 중');
   const targetKey = options.targets?.join(',') ?? '';
-  const personSelected = useRef(options.personSelected);
-  personSelected.current = options.personSelected;
 
   useEffect(() => {
     setDetections([]); setHands([]);
@@ -117,8 +115,7 @@ export function useObjectDetection(video: RefObject<HTMLVideoElement | null>, ca
           resizeHeight: Math.max(1, Math.round(source.videoHeight * scale)) });
         if (disposed || failed) { bitmap.close(); return; }
         frameSize = { width: bitmap.width, height: bitmap.height };
-        worker.postMessage({ type: 'frame', frame: bitmap, timestamp: now,
-          viewportWidth: source.clientWidth, viewportHeight: source.clientHeight, personSelected: personSelected.current }, [bitmap]);
+        worker.postMessage({ type: 'frame', frame: bitmap, timestamp: now }, [bitmap]);
       } catch {
         if (!disposed) fail();
       }
