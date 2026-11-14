@@ -97,7 +97,7 @@ function App() {
   const phoneText = alignmentDirection ? `폰을 조금 ${{left:'왼쪽',right:'오른쪽',up:'위쪽',down:'아래쪽'}[alignmentDirection]}으로 돌려주세요.` : '';
   useSceneSpeech(targeted ? foundVisible ? primary!.item : occluded ? lastSeen.current?.item : undefined : undefined,
     scene.state === 'guiding' ? `${scene.title}. ${scene.detail || ''}` : scene.state === 'found' ? phoneText : '', listening || search.busy || !!search.safety,
-    session.revision, lost, centered ? '물건이 가운데에 있어요. 이제 손을 뻗어 주세요.' : undefined, scene.state === 'found', centered);
+    session.revision, lost, centered ? '물건이 가운데에 있어요. 이제 손을 뻗어 주세요.' : undefined, scene.state === 'found', centered, scene.state === 'guiding' && !scene.direction);
 
 
   useEffect(() => {

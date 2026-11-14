@@ -38,6 +38,44 @@ function player(tts = async () => new Blob(['audio'],{type:'audio/mpeg'})) {
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
+test('alignment completion silences all speech for five seconds and discards stale queued notices', context => {
+  let now = 1000;
+  context.mock.method(performance, 'now', () => now);
+  const p = player(); const results: string[] = [];
+  p.speak('Aligned', undefined, {quietAfterMs:5000});
+  p.speak('Stale notice', reason => results.push(reason));
+  now = 4000;
+  assert.equal(p.isSpeechPaused(),false);
+  utterances[0].onend?.();
+  assert.equal(p.isSpeechPaused(),true);
+  assert.deepEqual(results,['cancelled']);
+  for (const priority of ['guidance','normal','found','safety'] as const) {
+    p.speak('Muted',undefined,{priority});
+  }
+  now = 8999;
+  assert.equal(p.isPrioritySpeaking(),true);
+  p.speak('Still muted');
+  assert.equal(utterances.length,1);
+  now = 9000;
+  assert.equal(p.isSpeechPaused(),false);
+  p.speak('Current guidance',undefined,{priority:'guidance'});
+  assert.equal(utterances[1].text,'Current guidance');
+});
+
+test('recorded audio completion starts the pause; explicit cancellation resets it', async context => {
+  let now = 0;
+  context.mock.method(performance, 'now', () => now);
+  const p = player(); p.setServerSpeechEnabled(true);
+  p.speak('Aligned',undefined,{quietAfterMs:5000});
+  await flush(); now = 2000;
+  audioInstances[0].onended?.();
+  assert.equal(p.isSpeechPaused(),true);
+  p.cancelSpeech();
+  assert.equal(p.isSpeechPaused(),false);
+  p.speak('Stopped'); await flush();
+  assert.equal(audioInstances.length,2);
+});
+
 test('discovery interrupts search speech and completes before queued descriptions', () => {
   const p = player(); const results: string[] = [];
   p.speak('Searching', reason => results.push('search:' + reason));

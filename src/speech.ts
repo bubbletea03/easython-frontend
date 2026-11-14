@@ -8,3 +8,4 @@ export const isPrioritySpeaking = player.isPrioritySpeaking;
 export const cancelSpeech = player.cancelSpeech;
 export const speak = player.speak;
 export const cancelGuidance = player.cancelGuidance;
+export const isSpeechPaused = player.isSpeechPaused;

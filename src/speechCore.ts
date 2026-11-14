@@ -1,5 +1,5 @@
 export type SpeechEndReason = 'ended' | 'cancelled' | 'error' | 'timeout';
-export type SpeechOptions = {priority?: 'guidance' | 'normal' | 'found' | 'safety'; clipId?:string; maxDurationMs?:number};
+export type SpeechOptions = {priority?: 'guidance' | 'normal' | 'found' | 'safety'; clipId?:string; maxDurationMs?:number; quietAfterMs?:number};
 type Job = {text:string; onFinish?: (reason:SpeechEndReason)=>void; options:SpeechOptions};
 const speechPriority = (options: SpeechOptions) => options.priority === 'safety' ? 3 : options.priority === 'found' ? 2 : options.priority === 'guidance' ? 0 : 1;
 
@@ -14,6 +14,8 @@ export function createSpeechPlayer(tts: (text: string, signal: AbortSignal) => P
   let watchdog: ReturnType<typeof setTimeout> | undefined;
   let activePriority = -1;
   let queue: Job[] = [];
+  let quietUntil = 0;
+  const isSpeechPaused = () => performance.now() < quietUntil;
 
   function resumeQueue() {
     if (activePriority === -1 && queue.length) start(queue.shift()!);
@@ -33,6 +35,7 @@ export function createSpeechPlayer(tts: (text: string, signal: AbortSignal) => P
     done?.(reason);
   }
   function cancelSpeech(reason: SpeechEndReason = 'cancelled') {
+    quietUntil = 0;
     const pending=queue; queue=[];
     releaseCurrent(reason); pending.forEach(job=>job.onFinish?.('cancelled'));
   }
@@ -45,6 +48,11 @@ export function createSpeechPlayer(tts: (text: string, signal: AbortSignal) => P
     priorityUntil = performance.now() + duration;
     const finish = (reason: SpeechEndReason) => {
       if (token !== generation) return;
+      if (reason === 'ended' && options.quietAfterMs) {
+        quietUntil = performance.now() + options.quietAfterMs;
+        const pending = queue; queue = [];
+        pending.forEach(job => job.onFinish?.('cancelled'));
+      }
       releaseCurrent(reason);
       resumeQueue();
     };
@@ -83,6 +91,7 @@ export function createSpeechPlayer(tts: (text: string, signal: AbortSignal) => P
     }).catch(() => { if (!request.signal.aborted) fallback(); });
   }
   function speak(text:string,onFinish?: (reason:SpeechEndReason)=>void,options:SpeechOptions={}) {
+    if (isSpeechPaused()) { onFinish?.('cancelled'); return; }
     if (!text.trim()) {onFinish?.('ended');return;}
     const priority=speechPriority(options);
     if(activePriority>=priority) {
@@ -95,7 +104,8 @@ export function createSpeechPlayer(tts: (text: string, signal: AbortSignal) => P
   }
   return {
     setServerSpeechEnabled(enabled: boolean) { serverEnabled = enabled; },
-    isPrioritySpeaking() { return performance.now() < priorityUntil; },
+    isPrioritySpeaking() { return isSpeechPaused() || performance.now() < priorityUntil; },
+    isSpeechPaused,
     cancelSpeech, speak,
     cancelGuidance() { if(activePriority === 0 || activePriority === 2) {
       releaseCurrent('cancelled');

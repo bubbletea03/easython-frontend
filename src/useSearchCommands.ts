@@ -80,7 +80,8 @@ export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, sel
         warned.current.add(warningKey);
         setSafety(result.safety);
         setMessage(result.safety);
-        speak(result.safety, () => {
+        speak(result.safety, reason => {
+          if (reason === 'cancelled') warned.current.delete(warningKey);
           if (alive.current && generation.current === token) setSafety(undefined);
         }, {priority:'safety',maxDurationMs:5000});
       }

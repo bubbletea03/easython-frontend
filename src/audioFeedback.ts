@@ -1,9 +1,11 @@
+import { isSpeechPaused } from './speech';
+
 let context: AudioContext | undefined;
 export function unlockFeedback() {
   try { context ??= new AudioContext(); void context.resume().catch(() => {}); } catch { /* Optional feedback on unsupported devices. */ }
 }
 function tone(frequency: number, at = 0, pan = 0) {
-  if (!context || context.state !== 'running') return;
+  if (isSpeechPaused() || !context || context.state !== 'running') return;
   const oscillator = context.createOscillator();
   const gain = context.createGain();
   const panner = context.createStereoPanner(); panner.pan.value = pan;
@@ -17,4 +19,4 @@ function tone(frequency: number, at = 0, pan = 0) {
 }
 export function listeningCue(start: boolean) { tone(start ? 660 : 990); tone(start ? 990 : 590, .1); if (!start) vibrate([20,40,20]); }
 export function guideCue(pan: number) { tone(880, 0, Math.max(-1, Math.min(1, pan))); }
-export function vibrate(pattern: number | number[]) { try { navigator.vibrate?.(pattern); } catch { /* Optional on iOS and unsupported browsers. */ } }
+export function vibrate(pattern: number | number[]) { if (isSpeechPaused()) return; try { navigator.vibrate?.(pattern); } catch { /* Optional on iOS and unsupported browsers. */ } }

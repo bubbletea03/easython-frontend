@@ -1,10 +1,10 @@
 ﻿import { useEffect, useRef } from 'react';
-import { isPrioritySpeaking, speak, cancelGuidance } from './speech';
+import { isPrioritySpeaking, isSpeechPaused, speak, cancelGuidance } from './speech';
 import { vibrate } from './audioFeedback';
 
-export function useSceneSpeech(target: { id: number; label: string } | undefined, guidance: string, listening: boolean, revision: number, lost: boolean, detail?: string, phone = false, reach = true) {
-  const latest = useRef({ target, guidance, listening, lost, detail, phone, reach });
-  latest.current = { target, guidance, listening, lost, detail, phone, reach };
+export function useSceneSpeech(target: { id: number; label: string } | undefined, guidance: string, listening: boolean, revision: number, lost: boolean, detail?: string, phone = false, reach = true, graspAligned = false) {
+  const latest = useRef({ target, guidance, listening, lost, detail, phone, reach, graspAligned });
+  latest.current = { target, guidance, listening, lost, detail, phone, reach, graspAligned };
   useEffect(() => {
     let announced = false, announcing = false, felt = false;
     let visibleSince: number | undefined;
@@ -17,6 +17,7 @@ export function useSceneSpeech(target: { id: number; label: string } | undefined
     const timer = window.setInterval(() => {
       const { target: current, guidance: text, listening: paused, lost: missing, detail: extra, phone: isPhone, reach: canReach } = latest.current;
       const now = performance.now();
+      if (isSpeechPaused()) return;
       if (previousReach && !canReach) cancelGuidance();
       previousReach = canReach;
       if (missing) { announced = false; felt = false; reachAnnounced = false; lastText = ''; spokenAt.clear(); }
@@ -49,7 +50,11 @@ export function useSceneSpeech(target: { id: number; label: string } | undefined
       if (!text || (isPhone ? now-lastPhoneAt < 6000 : text === lastText) || now - candidateSince < 500 || now - lastSpokenAt < 1500 || now - (spokenAt.get(text) ?? -Infinity) < 3000 || isPrioritySpeaking()) return;
       lastText = text; lastSpokenAt = now; spokenAt.set(text, now);
       if (isPhone) lastPhoneAt = now;
-      speak(text, reason => { if (reason !== 'ended') lastText = ''; }, {priority:'guidance'});
+      const pauseAfter = latest.current.graspAligned;
+      speak(text, reason => {
+        if (reason !== 'ended' || pauseAfter) lastText = '';
+        if (reason === 'ended') lastSpokenAt = performance.now();
+      }, {priority:'guidance', quietAfterMs:pauseAfter ? 5000 : undefined});
     }, 100);
     return () => { clearInterval(timer); cancelGuidance(); };
   }, [revision]);
