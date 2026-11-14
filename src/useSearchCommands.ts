@@ -39,11 +39,6 @@ export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, sel
     setMessage('');
     setSession(s => ({ running: false, targets: [], objectKo: '', revision: s.revision + 1 }));
   }
-  function completeGrip() {
-    cancel(); setOutcome('done');
-    setSession(s => ({...s,running:false,revision:s.revision+1}));
-    notify('잡으셨어요.');
-  }
   function unknown(text: string) {
     cancel(); setOutcome('unknown'); setSession(s => ({ ...s, running: false, revision: s.revision + 1 })); notify(text);
   }
@@ -163,5 +158,5 @@ export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, sel
     const timer = setTimeout(() => setSafety(undefined), 5000);
     return () => clearTimeout(timer);
   }, [safety]);
-  return { session, message, busy, handlePoint, safety, outcome, command, start, stop, find, describe, completeGrip };
+  return { session, message, busy, handlePoint, safety, outcome, command, start, stop, find, describe };
 }

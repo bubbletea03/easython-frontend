@@ -14,7 +14,10 @@ test('search, found, guiding and lost use real scene data', () => {
   const guide=deriveScene({...idle,running:true,found:true,guiding:true,direction:'left'});
   assert.equal(guide.title,'왼쪽으로');
   const overlap=deriveScene({...idle,running:true,found:true,guiding:true});
-  assert.match(overlap.title,/화면에서 겹쳐/); assert.doesNotMatch(overlap.title,/잡으세요|잡았어요|닿/);
+  assert.equal(overlap.state,'guiding');
+  assert.equal(overlap.title,'위치가 맞아요');
+  assert.equal(overlap.detail,'아직 닿지 않았다면 손을 조금 더 뻗어 보세요.');
+  assert.doesNotMatch(overlap.title,/잡으세요|잡았어요/);
   assert.equal(deriveScene({...idle,running:true,lost:true,lostSide:'right'}).lostSide,'right');
 });
 test('real safety overrides normal guidance and camera failure stays explicit', () => {

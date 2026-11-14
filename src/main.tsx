@@ -12,7 +12,7 @@ import { CameraHUD } from './CameraHUD';
 import { deriveScene, screenDirection } from './sceneUI';
 import { unlockFeedback, listeningCue, guideCue, vibrate } from './audioFeedback';
 import { speak, cancelSpeech, isPrioritySpeaking } from './speech';
-import { followHandlePoint, createGripSuccessGate } from './gripGeometry';
+import { followHandlePoint } from './gripGeometry';
 import { createPhoneLossNoticeGate, handOccludesTarget, lostDirection, gridAlignment } from './phoneGuidance';
 
 type VoiceRecognition = {
@@ -40,8 +40,6 @@ function App() {
   const [status, setStatus] = useState('카메라를 준비하고 있습니다.');
   const recognition = useRef<VoiceRecognition | null>(null);
   const voiceStartTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const gripSuccess = useRef(createGripSuccessGate());
-  const handsGoneAt = useRef<number | undefined>(undefined);
   const [listening, setListening] = useState(false);
   const [voiceMessage, setVoiceMessage] = useState('');
   const [voiceError, setVoiceError] = useState<string>();
@@ -98,20 +96,9 @@ function App() {
     direction, timedOut: now - searchStarted.current > 30000 });
   const phoneText = alignmentDirection ? `폰을 조금 ${{left:'왼쪽',right:'오른쪽',up:'위쪽',down:'아래쪽'}[alignmentDirection]}으로 돌려주세요.` : '';
   useSceneSpeech(targeted ? foundVisible ? primary!.item : occluded ? lastSeen.current?.item : undefined : undefined,
-    scene.state === 'guiding' ? scene.title : scene.state === 'found' ? phoneText : '', listening || search.busy || !!search.safety,
+    scene.state === 'guiding' ? `${scene.title}. ${scene.detail || ''}` : scene.state === 'found' ? phoneText : '', listening || search.busy || !!search.safety,
     session.revision, lost, centered ? '물건이 가운데에 있어요. 이제 손을 뻗어 주세요.' : undefined, scene.state === 'found', centered);
 
-  useEffect(() => {
-    if(gripSuccess.current.update(primary?.item.id, primary?.rect, nearestHand, now,
-      session.running && targeted && centered && !primary?.item.missing && !listening && !search.busy && !search.safety && !document.hidden)) search.completeGrip();
-  }, [now,session.running,session.revision,listening,search.busy,search.safety]);
-  useEffect(() => {gripSuccess.current.reset();handsGoneAt.current=undefined;},[session.revision]);
-  useEffect(() => {
-    if(search.outcome!=='done'||handMessage!=='손 추적 준비 완료'||document.hidden) {handsGoneAt.current=undefined;return;}
-    if(hands.length) {handsGoneAt.current=undefined;return;}
-    handsGoneAt.current ??= now;
-    if(now-handsGoneAt.current>=600 && !isPrioritySpeaking()) search.start();
-  },[now,hands.length,handMessage,search.outcome]);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(performance.now()), 250);
@@ -173,7 +160,7 @@ function App() {
       clearTimeout(voiceStartTimer.current);voiceStartTimer.current=undefined;
       const current=recognition.current;
       if(current) {current.onend=current.onerror=current.onresult=null;current.abort();recognition.current=null;}
-      setListening(false);gripSuccess.current.reset();
+      setListening(false);
     };
     document.addEventListener('visibilitychange',hide);
     return ()=>document.removeEventListener('visibilitychange',hide);
