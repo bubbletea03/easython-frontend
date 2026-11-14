@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { api } from './api';
 import { captureFrame, captureRegion } from './capture';
-import { speak, cancelSpeech } from './speech';
+import { speak, cancelSpeech, isPrioritySpeaking } from './speech';
 import type { DetectionTrack } from './detectionTracks';
 import { createAutoGripGate } from './autoGrip';
 import { relativeHandlePoint, followHandlePoint } from './gripGeometry';
@@ -96,7 +96,8 @@ export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, sel
         handleTarget.current = undefined; setHandlePoint(undefined); setSafety(undefined);
       }
       const enabled = autoDescribeEnabled.current && describeEnabled.current === true && !document.hidden;
-      if (autoGrip.current.update(item, performance.now(), enabled) && !describeLock.current) void describe();
+      // Automatic descriptions must not cancel the discovery announcement.
+      if (!isPrioritySpeaking() && autoGrip.current.update(item, performance.now(), enabled) && !describeLock.current) void describe();
     }, 100);
     return () => clearInterval(timer);
   }, []);

@@ -1,6 +1,7 @@
 export type SpeechEndReason = 'ended' | 'cancelled' | 'error' | 'timeout';
-export type SpeechOptions = {priority?: 'guidance' | 'normal' | 'safety'; clipId?:string; maxDurationMs?:number};
+export type SpeechOptions = {priority?: 'guidance' | 'normal' | 'found' | 'safety'; clipId?:string; maxDurationMs?:number};
 type Job = {text:string; onFinish?: (reason:SpeechEndReason)=>void; options:SpeechOptions};
+const speechPriority = (options: SpeechOptions) => options.priority === 'safety' ? 3 : options.priority === 'found' ? 2 : options.priority === 'guidance' ? 0 : 1;
 
 export function createSpeechPlayer(tts: (text: string, signal: AbortSignal) => Promise<Blob>, recording?: (text:string, id:string|undefined, signal:AbortSignal)=>Promise<Blob|undefined>) {
   let priorityUntil = 0;
@@ -13,6 +14,10 @@ export function createSpeechPlayer(tts: (text: string, signal: AbortSignal) => P
   let watchdog: ReturnType<typeof setTimeout> | undefined;
   let activePriority = -1;
   let queue: Job[] = [];
+
+  function resumeQueue() {
+    if (activePriority === -1 && queue.length) start(queue.shift()!);
+  }
 
   function releaseCurrent(reason: SpeechEndReason) {
     generation++;
@@ -35,13 +40,13 @@ export function createSpeechPlayer(tts: (text: string, signal: AbortSignal) => P
     if (!text.trim()) { onFinish?.('ended'); return; }
     const token = generation;
     completion = onFinish;
-    activePriority = options.priority === 'safety' ? 2 : options.priority === 'guidance' ? 0 : 1;
+    activePriority = speechPriority(options);
     const duration = options.maxDurationMs ?? 60000;
     priorityUntil = performance.now() + duration;
     const finish = (reason: SpeechEndReason) => {
       if (token !== generation) return;
       releaseCurrent(reason);
-      if (activePriority === -1 && queue.length) start(queue.shift()!);
+      resumeQueue();
     };
     watchdog = setTimeout(() => finish('timeout'), duration);
     let usingFallback = false;
@@ -79,9 +84,9 @@ export function createSpeechPlayer(tts: (text: string, signal: AbortSignal) => P
   }
   function speak(text:string,onFinish?: (reason:SpeechEndReason)=>void,options:SpeechOptions={}) {
     if (!text.trim()) {onFinish?.('ended');return;}
-    const priority=options.priority==='safety'?2:options.priority==='guidance'?0:1;
+    const priority=speechPriority(options);
     if(activePriority>=priority) {
-      if(priority===0 || queue.some(job=>job.text===text)) {onFinish?.('cancelled');return;}
+      if(priority===0 || priority===2 || queue.some(job=>job.text===text)) {onFinish?.('cancelled');return;}
       if(queue.length>=3) queue.shift()?.onFinish?.('cancelled');
       queue.push({text,onFinish,options});return;
     }
@@ -92,6 +97,9 @@ export function createSpeechPlayer(tts: (text: string, signal: AbortSignal) => P
     setServerSpeechEnabled(enabled: boolean) { serverEnabled = enabled; },
     isPrioritySpeaking() { return performance.now() < priorityUntil; },
     cancelSpeech, speak,
-    cancelGuidance() { if(activePriority === 0) releaseCurrent('cancelled'); },
+    cancelGuidance() { if(activePriority === 0 || activePriority === 2) {
+      releaseCurrent('cancelled');
+      resumeQueue();
+    } },
   };
 }

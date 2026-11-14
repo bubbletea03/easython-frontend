@@ -37,6 +37,42 @@ function player(tts = async () => new Blob(['audio'],{type:'audio/mpeg'})) {
   const p = createSpeechPlayer(tts); players.push(p); return p;
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
+
+test('discovery interrupts search speech and completes before queued descriptions', () => {
+  const p = player(); const results: string[] = [];
+  p.speak('Searching', reason => results.push('search:' + reason));
+  p.speak('Found the cup', reason => results.push('found:' + reason), {priority:'found'});
+  p.speak('Grasp instructions');
+  p.speak('Move left', undefined, {priority:'guidance'});
+  assert.deepEqual(results, ['search:cancelled']);
+  assert.deepEqual(utterances.map(u => u.text), ['Searching', 'Found the cup']);
+  utterances[1].onend?.();
+  assert.deepEqual(results, ['search:cancelled', 'found:ended']);
+  assert.equal(utterances[2].text, 'Grasp instructions');
+});
+
+test('discovery retries after safety rather than leaving a stale announcement queued', () => {
+  const p = player(); const results: string[] = [];
+  p.speak('Warning', undefined, {priority:'safety'});
+  p.speak('Found the cup', reason => results.push(reason), {priority:'found'});
+  assert.deepEqual(results, ['cancelled']);
+  utterances[0].onend?.();
+  assert.equal(utterances.length, 1);
+  p.speak('Found the cup', undefined, {priority:'found'});
+  assert.equal(utterances[1].text, 'Found the cup');
+});
+
+test('losing the target cancels discovery and resumes queued speech', () => {
+  const p = player(); const results: string[] = [];
+  p.speak('Found the cup', reason => results.push(reason), {priority:'found'});
+  const staleEnd = utterances[0].onend;
+  p.speak('Other notice');
+  p.cancelGuidance();
+  staleEnd?.();
+  assert.deepEqual(results, ['cancelled']);
+  assert.equal(utterances[1].text, 'Other notice');
+  assert.equal(p.isPrioritySpeaking(), true);
+});
 function warningScene(safety?: string) {
   return deriveScene({listening:false,busy:false,running:true,cameraReady:true,cameraError:false,message:'',
     outcome:'searching',targetLabel:'컵',found:true,lost:false,guiding:false,timedOut:false,safety});
