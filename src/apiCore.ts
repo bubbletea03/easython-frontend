@@ -1,4 +1,5 @@
-export type Health = { status: 'ok' | 'loading' | 'error'; model_loaded: boolean; describe_enabled: boolean; device: string; error?: string | null };
+export type Health = { status: 'ok' | 'loading' | 'error'; model_loaded: boolean; describe_enabled: boolean; tts_enabled?: boolean; tts_today_chars?: number; tts_daily_limit?: number; device: string; error?: string | null };
+export type ApiStats = { window_sec: number; queue_length: number } & Record<string, unknown>;
 export type ServerDetection = { label: string; target: string; score: number; box: { x: number; y: number; w: number; h: number } };
 export type ParseResult = { intent: 'find' | 'where' | 'how' | 'stop' | 'unknown'; object_ko: string | null; targets: string[] };
 export type Description = { sentences: string[]; safety?: string; handlePoint?: { x: number; y: number } };
@@ -37,7 +38,7 @@ const messages: Record<string, string> = {
 };
 export function createApiClient(config: { baseUrl: string; apiKey: string; clientId: () => string; fetcher?: typeof fetch }) {
   const fetcher = config.fetcher ?? fetch;
-  async function request(path: string, options: RequestInit = {}, signal?: AbortSignal, timeout = 20000): Promise<unknown> {
+  async function request(path: string, options: RequestInit = {}, signal?: AbortSignal, timeout = 20000, audio = false): Promise<unknown> {
     if (!config.apiKey.trim()) throw new ApiError('API 키를 설정해 주세요. 로컬 인식을 사용합니다.', 401, 'unauthorized');
     let clientId: string;
     try { clientId = config.clientId(); }
@@ -52,7 +53,7 @@ export function createApiClient(config: { baseUrl: string; apiKey: string; clien
       try {
         response = await fetcher(config.baseUrl.replace(/\/$/, '') + path, { ...options, signal: controller.signal,
           headers: { ...options.headers, 'X-API-Key': config.apiKey, 'X-Client-Id': clientId } });
-        body = await response.json().catch(error => { if (controller.signal.aborted) throw error; return null; });
+        body = audio && response.ok ? await response.blob() : await response.json().catch(error => { if (controller.signal.aborted) throw error; return null; });
       } catch {
         if (signal?.aborted) throw signal.reason;
         throw new ApiError(controller.signal.aborted ? '서버 응답 시간이 초과되었습니다.' : '서버 연결을 확인해 주세요.', 0, controller.signal.aborted ? 'timeout' : 'network_error');
@@ -71,6 +72,16 @@ export function createApiClient(config: { baseUrl: string; apiKey: string; clien
   }
   const invalid = () => new ApiError('서버 응답 형식이 올바르지 않습니다.', 0, 'invalid_response');
   return {
+    async stats(signal?: AbortSignal): Promise<ApiStats> {
+      const b = await request('/stats', {}, signal, 5000);
+      if (!record(b) || typeof b.window_sec !== 'number' || typeof b.queue_length !== 'number') throw invalid();
+      return b as ApiStats;
+    },
+    async tts(text: string, signal?: AbortSignal): Promise<Blob> {
+      const b = await request('/tts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) }, signal, 15000, true);
+      if (!(b instanceof Blob) || !b.size || !b.type.startsWith('audio/')) throw invalid();
+      return b;
+    },
     async health(signal?: AbortSignal): Promise<Health> {
       const b = await request('/health', {}, signal, 5000);
       if (!record(b) || !['ok', 'loading', 'error'].includes(String(b.status)) || typeof b.model_loaded !== 'boolean'
@@ -102,7 +113,13 @@ export function createApiClient(config: { baseUrl: string; apiKey: string; clien
   };
 }
 export function readDescription(result: unknown): Description {
+  if (Array.isArray(result)) {
+    // A single selected object is requested. Never combine coordinates from different objects.
+    if (result.length !== 1) return { sentences: ['대상이 여러 개이거나 불분명합니다. 물건 하나를 비추고 다시 시도해 주세요.'] };
+    return readDescription(result[0]);
+  }
   if (!record(result)) return { sentences: [] };
+  if (result.confidence === 'low') return { sentences: ['물건을 확실하게 확인하지 못했어요. 카메라를 가까이 비추고 다시 시도해 주세요.'] };
   const sentences = ['safety', 'grasp', 'comment'].flatMap(key => typeof result[key] === 'string' && result[key].trim() ? [result[key].trim()] : []);
   const point = result.handle_point;
   return { sentences, ...(typeof result.safety === 'string' && result.safety.trim() ? { safety: result.safety.trim() } : {}),

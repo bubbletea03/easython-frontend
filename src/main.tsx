@@ -12,7 +12,7 @@ import type { DetectionTrack } from './detectionTracks';
 import { CameraHUD, StartScreen } from './CameraHUD';
 import { deriveScene, screenDirection } from './sceneUI';
 import { unlockFeedback, listeningCue, guideCue, vibrate } from './audioFeedback';
-import { speak } from './speech';
+import { speak, cancelSpeech, isPrioritySpeaking } from './speech';
 
 type VoiceRecognition = {
   lang: string;
@@ -97,7 +97,7 @@ function App() {
     if (scene.state !== 'guiding' || !nearestHand) return;
     let last = 0;
     const timer = setInterval(() => {
-      if (document.hidden || window.speechSynthesis?.speaking || window.speechSynthesis?.pending) return;
+      if (document.hidden || isPrioritySpeaking() || window.speechSynthesis?.speaking || window.speechSynthesis?.pending) return;
       const timestamp = performance.now();
       const interval = Math.max(100, Math.min(800, nearestHand.distance * 2000));
       if (timestamp - last >= interval) { guideCue(direction === 'left' ? -1 : direction === 'right' ? 1 : 0); last = timestamp; }
@@ -149,7 +149,7 @@ function App() {
     if (search.busy) return;
     if (!cameraReady) { setStarted(false); return; }
     setVoiceError(undefined);
-    window.speechSynthesis?.cancel();
+    cancelSpeech();
     if (recognition.current) {
       recognition.current.stop();
       return;
@@ -256,7 +256,7 @@ function App() {
     };
   }, [started]);
 
-  if (!started) return <StartScreen onStart={() => { unlockFeedback(); setStarted(true); }} />;
+  if (!started) return <StartScreen onStart={() => { unlockFeedback(); search.start(); setStarted(true); }} />;
 
   return <main className={`camera-screen scene-${scene.state}`}>
     <video ref={video} autoPlay muted playsInline aria-label="카메라 미리보기" />

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { api, DEFAULT_TARGETS } from './api';
 import { captureFrame } from './capture';
-import { speak } from './speech';
+import { speak, cancelSpeech } from './speech';
 import type { DetectionTrack } from './detectionTracks';
 
 export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, selected: RefObject<DetectionTrack | undefined>, describeEnabled: RefObject<boolean | undefined>) {
@@ -18,10 +18,16 @@ export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, sel
   const notify = (text: string) => { setMessage(text); speak(text); };
   function cancel() {
     generation.current++; controller.current?.abort(); controller.current = undefined;
-    describeLock.current = false; setBusy(false); setHandlePoint(undefined); setSafety(undefined); window.speechSynthesis?.cancel();
+    describeLock.current = false; setBusy(false); setHandlePoint(undefined); setSafety(undefined); cancelSpeech();
   }
   function stop() {
     cancel(); setOutcome('idle'); setSession(s => ({ ...s, running: false, revision: s.revision + 1 })); notify('탐색과 안내를 중지했습니다.');
+  }
+  function start() {
+    cancel();
+    setOutcome('searching');
+    setMessage('주변 물체를 찾고 있어요. 찾을 물건은 말하기 버튼으로 말씀해 주세요.');
+    setSession(s => ({ running: true, targets: DEFAULT_TARGETS, objectKo: '', revision: s.revision + 1 }));
   }
   function unknown(text: string) {
     cancel(); setOutcome('unknown'); setSession(s => ({ ...s, running: false, revision: s.revision + 1 })); notify(text);
@@ -87,12 +93,12 @@ export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, sel
     alive.current = true;
     const hide = () => { if (document.hidden) cancel(); };
     document.addEventListener('visibilitychange', hide);
-    return () => { alive.current = false; generation.current++; controller.current?.abort(); window.speechSynthesis?.cancel(); document.removeEventListener('visibilitychange', hide); };
+    return () => { alive.current = false; generation.current++; controller.current?.abort(); cancelSpeech(); document.removeEventListener('visibilitychange', hide); };
   }, []);
   useEffect(() => {
     if (!handlePoint) return;
     const timer = setTimeout(() => setHandlePoint(undefined), 2500);
     return () => clearTimeout(timer);
   }, [handlePoint]);
-  return { session, message, busy, handlePoint, safety, outcome, command, stop, find, describe };
+  return { session, message, busy, handlePoint, safety, outcome, command, start, stop, find, describe };
 }

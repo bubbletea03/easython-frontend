@@ -1,3 +1,4 @@
+import { setServerSpeechEnabled } from './speech';
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { api, ApiError } from './api';
 import { abortableDelay } from './apiCore';
@@ -17,13 +18,14 @@ export function useBackendDetection(video: RefObject<HTMLVideoElement | null>, c
 
   useEffect(() => {
     const controller = new AbortController();
-    setReady(false); setDescribeEnabled(undefined); setStatus('백엔드 연결 확인 중 · 로컬 인식 사용');
+    setServerSpeechEnabled(false); setReady(false); setDescribeEnabled(undefined); setStatus('백엔드 연결 확인 중 · 로컬 인식 사용');
     async function check() {
       let failures = 0;
       for (let attempt = 0; attempt < 20 && !controller.signal.aborted; attempt++) {
         try {
           const health = await api.health(controller.signal);
           setDescribeEnabled(health.describe_enabled);
+          setServerSpeechEnabled(health.tts_enabled === true);
           if (health.status === 'error') { setStatus('서버 모델 오류 · 로컬 인식 사용'); return; }
           if (health.model_loaded && health.status === 'ok') { setReady(true); setStatus(`백엔드 탐지 · ${health.device}`); return; }
           setStatus('서버 모델 준비 중 · 로컬 인식 사용');
@@ -37,7 +39,7 @@ export function useBackendDetection(video: RefObject<HTMLVideoElement | null>, c
       if (!controller.signal.aborted) setStatus('서버 준비 대기 종료 · 로컬 인식 사용. 서버 재연결을 눌러 주세요.');
     }
     void check();
-    return () => controller.abort();
+    return () => { controller.abort(); setServerSpeechEnabled(false); };
   }, [retry]);
 
   useEffect(() => {
