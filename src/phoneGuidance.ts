@@ -6,6 +6,15 @@ export function phoneEdgeDirection(x: number): 'left' | 'right' | undefined {
   return x < .15 ? 'left' : x > .85 ? 'right' : undefined;
 }
 
+// Use the object's center in the visible, cover-cropped camera viewport.
+export function gridAlignment(x: number, y: number): 'left' | 'right' | 'up' | 'down' | undefined {
+  if (x < 1/3) return 'left';
+  if (x > 2/3) return 'right';
+  if (y < 1/3) return 'up';
+  if (y > 2/3) return 'down';
+  return undefined;
+}
+
 export function handOccludesTarget(hand: {x:number;y:number} | undefined, target: {x:number;y:number} | undefined, viewport: {width:number;height:number}) {
   return !!hand && !!target && viewport.width > 0 && viewport.height > 0
     && Math.hypot((target.x-hand.x)/viewport.width, (target.y-hand.y)/viewport.height) <= .15;

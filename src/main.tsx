@@ -13,7 +13,7 @@ import { deriveScene, screenDirection } from './sceneUI';
 import { unlockFeedback, listeningCue, guideCue, vibrate } from './audioFeedback';
 import { speak, cancelSpeech, isPrioritySpeaking } from './speech';
 import { followHandlePoint, createGripSuccessGate } from './gripGeometry';
-import { createPhoneLossNoticeGate, handOccludesTarget, lostDirection, phoneEdgeDirection } from './phoneGuidance';
+import { createPhoneLossNoticeGate, handOccludesTarget, lostDirection, gridAlignment } from './phoneGuidance';
 
 type VoiceRecognition = {
   lang: string;
@@ -80,31 +80,30 @@ function App() {
   const handlePoint = search.handlePoint && primary && !primary.item.missing && search.handlePoint.targetId === primary.item.id
     ? followHandlePoint(search.handlePoint,primary.item) : undefined;
   const handPoint = nearestHand?.index;
+  const alignmentDirection = guideRect ? gridAlignment((guideRect.x+guideRect.width/2)/viewport.width, (guideRect.y+guideRect.height/2)/viewport.height) : undefined;
+  const centered = !!guideRect && !alignmentDirection;
   const destination = handlePoint ? projectPoint(handlePoint, source, screen) : guideRect ? { x: guideRect.x + guideRect.width / 2, y: guideRect.y + guideRect.height / 2 } : undefined;
-  const aimOffset = primary ? primary.rect.x + primary.rect.width / 2 - viewport.width / 2 : 0;
-  const direction = handPoint && destination ? screenDirection(destination.x - handPoint.x, destination.y - handPoint.y)
-    : screenDirection(Math.abs(aimOffset) > viewport.width * .1 ? aimOffset : 0, 0);
+  const direction = centered && handPoint && destination ? screenDirection(destination.x - handPoint.x, destination.y - handPoint.y)
+    : alignmentDirection;
   const foundVisible = !!primary && !primary.item.missing;
   const occluded = !foundVisible && handOccludesTarget(handPoint, destination, viewport);
   const missingFor = !foundVisible && lastSeen.current ? now-lastSeen.current.at : 0;
   const lost = targeted && session.running && !occluded && missingFor > 2000;
   const researching = lost && missingFor >= 10000;
   const lostSide = lostDirection(lastSeen.current?.x ?? .5);
-  const edgeDirection = phoneEdgeDirection(primary ? (primary.rect.x + primary.rect.width/2)/viewport.width : .5);
   const scene = deriveScene({ listening, busy: search.busy, running: session.running && targeted, cameraReady,
     cameraError, message: cameraError ? status : voiceError || search.message, safety: search.safety, outcome: voiceError ? 'unknown' : search.outcome,
     targetLabel: primary?.item.label || session.objectKo, found: foundVisible || occluded, lost: lost && !researching,
-    lostSide, guiding: !!handPoint,
+    lostSide, guiding: centered && !!handPoint, centered,
     direction, timedOut: now - searchStarted.current > 30000 });
-  const phoneText = edgeDirection ? `폰을 조금 ${edgeDirection === 'left' ? '왼쪽' : '오른쪽'}으로 돌려주세요.` : '';
-  const foundPosition = aimOffset < -viewport.width*.1 ? '화면 왼쪽에 있어요.' : aimOffset > viewport.width*.1 ? '화면 오른쪽에 있어요.' : '화면 정면에 있어요.';
+  const phoneText = alignmentDirection ? `폰을 조금 ${{left:'왼쪽',right:'오른쪽',up:'위쪽',down:'아래쪽'}[alignmentDirection]}으로 돌려주세요.` : '';
   useSceneSpeech(targeted ? foundVisible ? primary!.item : occluded ? lastSeen.current?.item : undefined : undefined,
     scene.state === 'guiding' ? scene.title : scene.state === 'found' ? phoneText : '', listening || search.busy || !!search.safety,
-    session.revision, lost, `${foundPosition} 손을 화면 앞으로 넣어 주세요.`, scene.state === 'found');
+    session.revision, lost, centered ? '물건이 가운데에 있어요. 이제 손을 뻗어 주세요.' : undefined, scene.state === 'found', centered);
 
   useEffect(() => {
     if(gripSuccess.current.update(primary?.item.id, primary?.rect, nearestHand, now,
-      session.running && targeted && !primary?.item.missing && !listening && !search.busy && !search.safety && !document.hidden)) search.completeGrip();
+      session.running && targeted && centered && !primary?.item.missing && !listening && !search.busy && !search.safety && !document.hidden)) search.completeGrip();
   }, [now,session.running,session.revision,listening,search.busy,search.safety]);
   useEffect(() => {gripSuccess.current.reset();handsGoneAt.current=undefined;},[session.revision]);
   useEffect(() => {
