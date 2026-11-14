@@ -14,3 +14,5 @@ export const isSpeechPaused = player.isSpeechPaused;
 export const getSpeechLog = player.getSpeechLog;
 export const canListenDuringSpeech = player.canListenDuringSpeech;
 export const getPlaybackMode = player.getPlaybackMode;
+export const getSpeechAnnouncement = player.getAnnouncement;
+export const subscribeSpeech = player.subscribe;

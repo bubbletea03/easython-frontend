@@ -1,11 +1,12 @@
 ﻿import { useEffect, useRef } from 'react';
 import { isPrioritySpeaking, isSpeechPaused, speak, cancelGuidance } from './speech';
-import { vibrate } from './audioFeedback';
+import { vibrate, phoneCue } from './audioFeedback';
+import type { PhaseNotice } from './phoneGuidance';
 import { foundRecordingId } from './recordedSpeech';
 
-export function useSceneSpeech(target: { id: number; label: string } | undefined, guidance: string, listening: boolean, revision: number, lost: boolean, detail?: string, phone = false, reach = true, graspAligned = false, clipId?: string, graspTip?: string) {
-  const latest = useRef({ target, guidance, listening, lost, detail, phone, reach, graspAligned, clipId, graspTip });
-  latest.current = { target, guidance, listening, lost, detail, phone, reach, graspAligned, clipId, graspTip };
+export function useSceneSpeech(target: { id: number; label: string } | undefined, guidance: string, listening: boolean, revision: number, lost: boolean, detail?: string, phone = false, reach = true, graspAligned = false, clipId?: string, graspTip?: string,phaseNotice?:PhaseNotice,onAlignedEnd?:()=>void) {
+  const latest = useRef({ target, guidance, listening, lost, detail, phone, reach, graspAligned, clipId, graspTip,phaseNotice,onAlignedEnd });
+  latest.current = { target, guidance, listening, lost, detail, phone, reach, graspAligned, clipId, graspTip,phaseNotice,onAlignedEnd };
   useEffect(() => {
     let announced = false, announcing = false, felt = false;
     let visibleSince: number | undefined;
@@ -13,6 +14,8 @@ export function useSceneSpeech(target: { id: number; label: string } | undefined
     let lastPhoneAt = -Infinity;
     let reachAnnounced = false, reaching = false;
     let graspAnnounced = false, graspSpeaking = false;
+    let alignedAnnounced=false,alignedFelt=false;
+    const phaseSpoken=new Set<number>();
     let previousReach = latest.current.reach;
     let reachSince: number | undefined;
     const spokenAt = new Map<string, number>();
@@ -41,8 +44,15 @@ export function useSceneSpeech(target: { id: number; label: string } | undefined
           if (reason === 'ended') {
             announced = true; lastSpokenAt = performance.now(); lastPhoneAt = -Infinity;
           }
-        }, {priority:'found',clipId:foundRecordingId(current.label)});
+        }, {priority:'found',clipId:foundRecordingId(current.label),isRelevant:()=>!!latest.current.target&&!latest.current.listening&&!latest.current.lost});
         return;
+      }
+      const transition=latest.current.phaseNotice;
+      if(transition&&!phaseSpoken.has(transition.id)&&now-lastSpokenAt>=1500&&!isPrioritySpeaking()){
+        lastSpokenAt=now;if(transition.phone){lastPhoneAt=now;phoneCue();}
+        speak(transition.text,reason=>{
+          if(reason==='ended'){phaseSpoken.add(transition.id);lastSpokenAt=performance.now();if(transition.phone)lastPhoneAt=lastSpokenAt;else reachAnnounced=true;}
+        },{priority:'guidance',isRelevant:()=>latest.current.phaseNotice?.id===transition.id&&!latest.current.listening});return;
       }
       if (canReach && extra && !reachAnnounced && !reaching && reachSince !== undefined && now-reachSince >= 500 && now-lastSpokenAt >= 1500 && !isPrioritySpeaking()) {
         reaching = true; lastSpokenAt = now;
@@ -57,17 +67,23 @@ export function useSceneSpeech(target: { id: number; label: string } | undefined
         }, {priority:'guidance'});
         return;
       }
+      if(latest.current.graspAligned&&alignedAnnounced)return;
       if (!text || (isPhone ? now-lastPhoneAt < 6000 : text === lastText) || now - candidateSince < 500 || now - lastSpokenAt < 1500 || now - (spokenAt.get(text) ?? -Infinity) < 3000 || isPrioritySpeaking()) return;
       lastText = text; lastSpokenAt = now; spokenAt.set(text, now);
       if (isPhone) lastPhoneAt = now;
       const pauseAfter = latest.current.graspAligned;
+      const finishAlignment=latest.current.onAlignedEnd;
+      if(isPhone)phoneCue();
+      if(pauseAfter&&!alignedFelt){alignedFelt=true;vibrate(80);}
       speak(text, reason => {
         if (reason !== 'ended') {
           lastText = ''; spokenAt.delete(text);
           if (isPhone) lastPhoneAt = -Infinity;
         } else if (pauseAfter) lastText = '';
+        if(reason==='ended'&&pauseAfter){alignedAnnounced=true;finishAlignment?.();}
         if (reason === 'ended') lastSpokenAt = performance.now();
-      }, {priority:'guidance', clipId:latest.current.clipId, quietAfterMs:pauseAfter ? 5000 : undefined});
+      }, {priority:'guidance', clipId:latest.current.clipId, quietAfterMs:pauseAfter&&!finishAlignment ? 5000 : undefined,
+        isRelevant:()=>latest.current.guidance===text&&!latest.current.listening&&!!latest.current.target});
     }, 100);
     return () => { clearInterval(timer); cancelGuidance(); };
   }, [revision]);
