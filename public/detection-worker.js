@@ -9,7 +9,8 @@ self.onmessage = async ({ data }) => {
       const files = await Vision.FilesetResolver.forVisionTasks(data.baseUrl + 'mediapipe');
       detector = data.objects === false ? undefined : await Vision.ObjectDetector.createFromOptions(files, {
         baseOptions: { modelAssetPath: data.baseUrl + 'models/efficientdet_lite0.tflite', delegate: 'CPU' },
-        runningMode: 'VIDEO', scoreThreshold: 0.65, maxResults: 10,
+        runningMode: 'VIDEO', scoreThreshold: 0.35, maxResults: 10,
+        categoryDenylist: ['person'],
       });
       self.postMessage({ type: 'ready' });
     } catch (error) {
@@ -33,8 +34,7 @@ self.onmessage = async ({ data }) => {
     try {
       const result = detector ? detector.detectForVideo(data.frame, data.timestamp) : { detections: [] };
       let hands = [];
-      // Keep internal hand tracking available to reject hand-only person false
-      // positives. The UI still hides hands when a full person is selected.
+      // Track hands independently from object detection.
       if (handDetector) {
         try { hands = handDetector.detectForVideo(data.frame, data.timestamp).landmarks; }
         catch (error) {

@@ -1,5 +1,7 @@
 # 물건 찾기 백엔드 연동
 
+> 이 문서는 최초 로컬 백엔드 연동의 구현 기록이다. 현재 API 계약·설정은 [API 계약](api.md)·[배포 설정](deployment.md)을, 점수·전체 탐지·음성·그립 추정의 최신 동작과 실제 서버 검증은 [리뷰 수정 내역](review-fixes.md)을 따른다. 아래의 0.65·기본 10개 목록·2.5초 만료·맞춤 프롬프트·VITE_API_KEY 설정은 현재 동작이 아니다.
+
 ## 확인한 프로젝트와 계약
 
 React 19 + TypeScript + Vite. 적용할 AGENTS.md는 저장소·상위 디렉토리에서 발견되지 않았다. 카메라는 후면 Full HD 요청, 영상은 `object-fit: cover`이며 미러링하지 않는다. 음성 인식은 Web Speech API로 최종 텍스트를 얻고, TTS는 `speechSynthesis` 한국어 음성을 사용한다. 기존 `src/api.ts`는 사용되지 않던 이전 `/api/detect` 계약이므로 교체했다.

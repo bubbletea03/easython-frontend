@@ -67,7 +67,7 @@ test('cancellation settles once and old voice events cannot clear newer speech',
   const p = player(); const results: string[] = [];
   p.speak('이전 경고', reason => results.push(reason));
   const oldEnd = utterances[0].onend;
-  p.speak('새 안내', reason => results.push(reason));
+  p.speak('새 안내', reason => results.push(reason),{priority:'safety'});
   assert.deepEqual(results,['cancelled']);
   oldEnd?.(); assert.equal(p.isPrioritySpeaking(),true);
   utterances[1].onend?.();
@@ -96,4 +96,27 @@ test('missing completion events time out instead of retaining the warning foreve
   p.speak('조심하세요.', reason => results.push(reason));
   context.mock.timers.tick(60000);
   assert.deepEqual(results,['timeout']); assert.equal(p.isPrioritySpeaking(),false);
+});
+test('safety is not interrupted by ordinary guidance and normal speech waits its turn',()=>{
+  const p=player();const finished:string[]=[];
+  p.speak('위험 안내',r=>finished.push('safety:'+r),{priority:'safety'});
+  p.speak('일반 설명',r=>finished.push('normal:'+r));
+  p.speak('지난 방향',r=>finished.push('guidance:'+r),{priority:'guidance'});
+  assert.equal(utterances.length,1);assert.deepEqual(finished,['guidance:cancelled']);
+  utterances[0].onend?.();assert.equal(utterances[1].text,'일반 설명');
+  utterances[1].onend?.();assert.deepEqual(finished,['guidance:cancelled','safety:ended','normal:ended']);
+});
+test('recordings play before dynamic TTS; missing recordings fall through to TTS',async()=>{
+  let generated=0,recordings=0;
+  const p=createSpeechPlayer(async()=>{generated++;return new Blob(['tts'],{type:'audio/mpeg'});},async(_text,id)=>{
+    recordings++;return id==='ready'?new Blob(['recording'],{type:'audio/mpeg'}):undefined;
+  });players.push(p);p.setServerSpeechEnabled(true);
+  p.speak('준비',undefined,{clipId:'ready'});await flush();assert.equal(generated,0);assert.equal(recordings,1);
+  audioInstances[0].onended?.();p.speak('동적 문장');await flush();assert.equal(generated,1);
+  audioInstances[1].onended?.();
+});
+test('safety releases at five seconds and queued grasp guidance continues',context=>{
+  context.mock.timers.enable({apis:['setTimeout']});const p=player();let safety=true;
+  p.speak('경고',()=>{safety=false;},{priority:'safety',maxDurationMs:5000});p.speak('잡는 방법');
+  context.mock.timers.tick(5000);assert.equal(safety,false);assert.equal(utterances[1].text,'잡는 방법');
 });

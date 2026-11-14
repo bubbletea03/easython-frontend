@@ -1,5 +1,6 @@
 import { useEffect, useState, type RefObject } from 'react';
 import type { Detection } from '@mediapipe/tasks-vision';
+import { isPersonLabel } from './objectFilter';
 import { updateTracks, TRACK_HOLD_MS, type DetectionBox, type DetectionTrack } from './detectionTracks';
 import type { NormalizedLandmark } from '@mediapipe/tasks-vision';
 
@@ -32,6 +33,7 @@ export function useObjectDetection(video: RefObject<HTMLVideoElement | null>, ca
   useEffect(() => {
     setDetections([]); setHands([]);
     if (!cameraReady || !options.enabled) return;
+    setHandMessage('손 추적 준비 중');
     let disposed = false;
     let busy = false;
     let ready = false;
@@ -81,11 +83,10 @@ export function useObjectDetection(video: RefObject<HTMLVideoElement | null>, ca
         const items: DetectionBox[] = (data.detections as Detection[]).flatMap(item => {
           const box = item.boundingBox;
           const category = item.categories[0];
-          if (!box || !category || category.score < 0.65) return [];
+          if (!box || !category || category.score < 0.35 || isPersonLabel(category.categoryName)) return [];
           const aliases: Record<string, string> = { mug: 'cup', tumbler: 'cup', 'remote control': 'remote', 'mobile phone': 'cell phone', phone: 'cell phone', 'water bottle': 'bottle' };
           if (targetKey && !targetKey.split(',').some(t => (aliases[t] ?? t) === category.categoryName)) return [];
-          const label = category.categoryName === 'cup' || category.categoryName === 'bowl'
-            ? (box.height >= box.width ? '컵' : '보울') : labels[category.categoryName] ?? category.categoryName;
+          const label = labels[category.categoryName] ?? category.categoryName;
           return [{ label, score: category.score,
             x: box.originX / frameSize.width, y: box.originY / frameSize.height,
             width: box.width / frameSize.width, height: box.height / frameSize.height }];

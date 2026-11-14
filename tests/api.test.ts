@@ -27,13 +27,13 @@ test('detect sends exact multipart fields, preserves normalized boxes and accept
     assert.equal(url, '/api/detect');
     assert.equal(new Headers(init?.headers).has('Content-Type'), false);
     const form = init?.body as FormData;
-    assert.equal(form.get('targets'), 'cup,key'); assert.equal(form.get('conf'), '0.65'); assert.equal(form.get('imgsz'), '640');
+    assert.equal(form.get('targets'), 'cup,key'); assert.equal(form.get('conf'), '0.25'); assert.equal(form.get('imgsz'), '640');
     assert.ok(form.get('image') instanceof Blob);
     return response({ detections: calls++ ? [] : [{ label:'mug',target:'cup',score:.83,box:{x:.1,y:.2,w:.3,h:.4} }] });
   });
-  assert.equal((await api.detect(new Blob(['image']), ['cup','key']))[0].box.x, .1);
-  assert.deepEqual(await api.detect(new Blob(['image']), ['cup','key']), []);
-  await assert.rejects(api.detect(new Blob(), []), (e: ApiError) => e.code === 'invalid_targets');
+  assert.equal((await api.detect(new Blob(['image']), ['cup','key'])).detections[0].box.x, .1);
+  assert.deepEqual((await api.detect(new Blob(['image']), ['cup','key'])).detections, []);
+  await assert.rejects(api.detect(new Blob(), [' ']), (e: ApiError) => e.code === 'invalid_targets');
   assert.equal(calls, 2);
 });
 test('429 retries once after header delay; persistent 429 terminates', async () => {
@@ -69,10 +69,29 @@ test('parse sends text once; disabled describe capability is not a parse readine
   assert.deepEqual((await api.parse('컵 찾아줘')).targets,['cup']);
 });
 test('describe reads nested result safely, prioritizes safety and never accepts arbitrary coordinates', async () => {
-  const api = client(async () => response({ result: { safety:'뜨거워요.',grasp:'손잡이',comment:'컵',handle_point:{x:.8,y:.5} }, grasp:'wrong' }));
-  const result = await api.describe(new Blob(),'custom prompt');
+  const api = client(async (_url,init) => {
+    assert.equal((init?.body as FormData).has('prompt'),false);
+    return response({ result: { safety:'뜨거워요.',grasp:'손잡이',comment:'컵',handle_point:{x:.8,y:.5} }, grasp:'wrong' });
+  });
+  const result = await api.describe(new Blob());
   assert.deepEqual(result.sentences,['뜨거워요.','손잡이','컵']); assert.deepEqual(result.handlePoint,{x:.8,y:.5});
   assert.deepEqual(readDescription([{grasp:'손잡이를 잡아 주세요.'}]),{sentences:['손잡이를 잡아 주세요.']});
   assert.equal(readDescription([{handle_point:{x:.2,y:.3}},{handle_point:{x:.8,y:.5}}]).handlePoint,undefined);
   assert.deepEqual(readDescription({safety:null,grasp:3,handle_point:{x:2,y:.5}}),{sentences:[]});
+});
+test('all mode omits targets, keeps color metadata and permits a same-origin server-held key',async()=>{
+  const api=createApiClient({baseUrl:'/api',apiKey:'',requireApiKey:false,clientId:()=> 'test',fetcher:async(_url,init)=>{
+    assert.equal((init?.body as FormData).has('targets'),false);
+    return response({mode:'all',detections:[],color_filter:'black',color_rejected:[{color:'white'}]});
+  }});
+  const result=await api.detect(new Blob());
+  assert.equal(result.mode,'all');assert.equal(result.color_filter,'black');assert.deepEqual(result.color_rejected,[{color:'white'}]);
+});
+test('TTS times out after three seconds and does not queue a delayed rate-limit retry',async context=>{
+  context.mock.timers.enable({apis:['setTimeout']});
+  const api=client(async(_url,init)=>new Promise((_resolve,reject)=>init?.signal?.addEventListener('abort',()=>reject(new Error('abort')))));
+  const pending=api.tts('테스트');context.mock.timers.tick(3000);
+  await assert.rejects(pending,(error:ApiError)=>error.code==='timeout');
+  let calls=0;const limited=client(async()=>{calls++;return response({error:{code:'rate_limited'}},429,{'Retry-After':'30'});});
+  await assert.rejects(limited.tts('테스트'));assert.equal(calls,1);
 });

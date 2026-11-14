@@ -15,7 +15,7 @@ export function deriveScene(input: { listening: boolean; busy: boolean; running:
   if (input.listening) return { state: 'listening', status: '듣고 있어요', title: '편하게 말씀해 주세요' };
   if (input.safety) return { state: 'warning', status: '조심하세요', title: '조심하세요', detail: input.safety };
   if (input.busy) return { state: 'processing', status: '확인하고 있어요', title: '잠시만 기다려 주세요' };
-  if (input.outcome === 'done') return { state: 'done', status: '잡았어요', title: '잡았어요', detail: '말씀하신 내용을 확인했어요' };
+  if (input.outcome === 'done') return { state: 'done', status: '잡았어요', title: '잡았어요', detail: '화면상 겹침 또는 음성 확인 기준이에요. 실제 접촉은 확인할 수 없어요.' };
   if (input.outcome === 'unknown') return { state: 'unknown', status: '다시 말씀해 주세요', title: '다시 말씀해 주세요', detail: input.message || '다른 이름으로 말해 보세요' };
   if (!input.cameraReady) return { state: 'processing', status: '준비하고 있어요', title: '카메라를 준비하고 있어요' };
   if (!input.running) return { state: 'idle', status: '준비됐어요', title: '누르고 말하세요' };

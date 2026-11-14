@@ -4,6 +4,8 @@
   "installCommand": "npm ci",
   "buildCommand": "npm test && npm run build && node scripts/check-build.mjs",
   "outputDirectory": "dist",
+  "functions": {"api/backend.js": {"maxDuration": 60}},
+  "rewrites": [{"source":"/api/:endpoint(health|stats|detect|parse|describe|tts)","destination":"/api/backend?endpoint=:endpoint"}],
   "git": {
     "deploymentEnabled": true
   },

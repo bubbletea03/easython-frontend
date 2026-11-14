@@ -1,6 +1,6 @@
 ﻿# 브라우저 물체 탐지
 
-> 최신 백엔드 우선 탐지·명령 해석·설명 연동과 데이터 전송 범위는 [백엔드 연동 안내](backend-integration.md)를 참고하세요. 이 문서는 로컬 인식 구현 당시의 기록입니다. 실제 접촉·그립 성공은 판정하지 않습니다.
+> 이 문서는 최초 로컬 인식 구현 당시의 기록입니다. 현재 화면 기준은 0.35이며 컵/보울 비율 강제 분류는 제거했습니다. 최신 동작은 [리뷰 수정 내역](review-fixes.md)을 참고하세요. 화면상 그립 추정은 지원하지만 실제 접촉은 측정하지 않습니다.
 
 - 모델: Google MediaPipe EfficientDet-Lite0 INT8, COCO 80종
 - 출처: https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/int8/1/efficientdet_lite0.tflite

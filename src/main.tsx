@@ -7,13 +7,12 @@ import { fingerGuidance, projectBox, projectPoint } from './sceneGeometry';
 import { useSceneSpeech } from './useSceneSpeech';
 import { useBackendDetection } from './useBackendDetection';
 import { useSearchCommands } from './useSearchCommands';
-import { DEFAULT_TARGETS } from './api';
 import type { DetectionTrack } from './detectionTracks';
 import { CameraHUD, StartScreen } from './CameraHUD';
 import { deriveScene, screenDirection } from './sceneUI';
 import { unlockFeedback, listeningCue, guideCue, vibrate } from './audioFeedback';
 import { speak, cancelSpeech, isPrioritySpeaking } from './speech';
-import { isHandOnlyPerson } from './handObjectFilter';
+import { followHandlePoint, createGripSuccessGate } from './gripGeometry';
 
 type VoiceRecognition = {
   lang: string;
@@ -37,6 +36,9 @@ function App() {
   const video = useRef<HTMLVideoElement>(null);
   const [status, setStatus] = useState('카메라를 준비하고 있습니다.');
   const recognition = useRef<VoiceRecognition | null>(null);
+  const voiceStartTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const gripSuccess = useRef(createGripSuccessGate());
+  const handsGoneAt = useRef<number | undefined>(undefined);
   const [listening, setListening] = useState(false);
   const [voiceMessage, setVoiceMessage] = useState('');
   const [voiceError, setVoiceError] = useState<string>();
@@ -49,11 +51,11 @@ function App() {
   const { session } = search;
   const backend = useBackendDetection(video, cameraReady, session.running, session.targets, session.objectKo, session.revision);
   descriptionCapability.current = backend.describeEnabled;
-  autoDescribeEnabled.current = cameraReady && session.running && backend.active && !listening && !search.busy;
-  const local = useObjectDetection(video, cameraReady, { enabled: session.running, objects: !backend.active,
-    targets: session.objectKo || session.targets !== DEFAULT_TARGETS ? session.targets : null });
-  const detections = session.running ? (backend.active ? backend.detections : local.detections)
-    .filter(item => !isHandOnlyPerson(item, local.hands)) : [];
+  const targeted = session.targets.length > 0;
+  autoDescribeEnabled.current = cameraReady && session.running && targeted && backend.active && !listening && !search.busy && !search.safety;
+  const local = useObjectDetection(video, cameraReady, { enabled: session.running || search.outcome==='done', objects: session.running && !backend.active,
+    targets: targeted ? session.targets : null });
+  const detections = session.running ? (backend.active ? backend.detections : local.detections) : [];
   const { detectionMessage, hands, handMessage } = local;
   const source = { x: 0, y: 0, width: video.current?.videoWidth || 1, height: video.current?.videoHeight || 1 };
   const screen = { x: 0, y: 0, ...viewport };
@@ -62,8 +64,7 @@ function App() {
   const current = visible.filter(({ item }) => !item.missing);
   const primary = (current.length ? current : visible).sort((a,b) => b.rect.width * b.rect.height - a.rect.width * a.rect.height)[0];
   selected.current = primary?.item;
-  const personSelected = primary?.item.label === '사람';
-  const nearestHand = primary && !primary.item.missing && !personSelected ? hands.map(hand => {
+  const nearestHand = primary && !primary.item.missing ? hands.map(hand => {
     const thumb = projectPoint(hand[4], source, screen);
     const index = projectPoint(hand[8], source, screen);
     return { thumb, index, distance: fingerGuidance({ x: (thumb.x + index.x) / 2, y: (thumb.y + index.y) / 2 }, primary.rect, screen).fraction };
@@ -72,20 +73,34 @@ function App() {
   const guidance = primary && nearestHand
     ? `엄지: ${fingerGuidance(nearestHand.thumb, primary.rect, screen).text}. 검지: ${fingerGuidance(nearestHand.index, primary.rect, screen).text}.`
     : '';
-  const handlePoint = search.handlePoint && primary && !primary.item.missing && search.handlePoint.targetId === primary.item.id ? search.handlePoint : undefined;
+  const handlePoint = search.handlePoint && primary && !primary.item.missing && search.handlePoint.targetId === primary.item.id
+    ? followHandlePoint(search.handlePoint,primary.item) : undefined;
   const handPoint = nearestHand?.index;
   const destination = handlePoint ? projectPoint(handlePoint, source, screen) : primary ? { x: primary.rect.x + primary.rect.width / 2, y: primary.rect.y + primary.rect.height / 2 } : undefined;
   const aimOffset = primary ? primary.rect.x + primary.rect.width / 2 - viewport.width / 2 : 0;
   const direction = handPoint && destination ? screenDirection(destination.x - handPoint.x, destination.y - handPoint.y)
     : screenDirection(Math.abs(aimOffset) > viewport.width * .1 ? aimOffset : 0, 0);
-  const lost = session.running && !!lastSeen.current && now - lastSeen.current.at > 2000 && (!primary || primary.item.missing);
-  const scene = deriveScene({ listening, busy: search.busy, running: session.running, cameraReady,
+  const lost = targeted && session.running && !!lastSeen.current && now - lastSeen.current.at > 2000 && (!primary || primary.item.missing);
+  const scene = deriveScene({ listening, busy: search.busy, running: session.running && targeted, cameraReady,
     cameraError, message: cameraError ? status : voiceError || search.message, safety: search.safety, outcome: voiceError ? 'unknown' : search.outcome,
     targetLabel: primary?.item.label || session.objectKo, found: !!primary && !primary.item.missing, lost,
     lostSide: lastSeen.current && lastSeen.current.x < .5 ? 'left' : 'right', guiding: !!handPoint,
     direction, timedOut: now - searchStarted.current > 30000 });
-  useSceneSpeech(primary && !primary.item.missing ? primary.item : undefined,
-    scene.state === 'guiding' || scene.state === 'found' ? `${scene.title}. ${scene.detail || ''}` : '', listening || search.busy);
+  const spokenGuidance = direction ? `${{left:'왼쪽으로',right:'오른쪽으로',up:'위쪽으로',down:'아래쪽으로'}[direction]} 이동하세요.` : '화면에서 겹쳐 있어요.';
+  useSceneSpeech(targeted && primary && !primary.item.missing ? primary.item : undefined,
+    scene.state === 'guiding' || scene.state === 'found' ? spokenGuidance : '', listening || search.busy || !!search.safety);
+
+  useEffect(() => {
+    if(gripSuccess.current.update(primary?.item.id, primary?.rect, nearestHand, now,
+      session.running && targeted && !primary?.item.missing && !listening && !search.busy && !search.safety && !document.hidden)) search.completeGrip();
+  }, [now,session.running,session.revision,listening,search.busy,search.safety]);
+  useEffect(() => {gripSuccess.current.reset();handsGoneAt.current=undefined;},[session.revision]);
+  useEffect(() => {
+    if(search.outcome!=='done'||handMessage!=='손 추적 준비 완료'||document.hidden) {handsGoneAt.current=undefined;return;}
+    if(hands.length) {handsGoneAt.current=undefined;return;}
+    handsGoneAt.current ??= now;
+    if(now-handsGoneAt.current>=600 && !isPrioritySpeaking()) search.start();
+  },[now,hands.length,handMessage,search.outcome]);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(performance.now()), 250);
@@ -97,7 +112,7 @@ function App() {
     if (primary && !primary.item.missing) lastSeen.current = { at: primary.item.lastSeen, x: (primary.rect.x + primary.rect.width / 2) / viewport.width };
   }, [primary?.item.lastSeen, primary?.item.id]);
   useEffect(() => {
-    if (scene.state !== 'guiding' || !nearestHand) return;
+    if (!targeted || scene.state !== 'guiding' || !nearestHand) return;
     let last = 0;
     const timer = setInterval(() => {
       if (document.hidden || isPrioritySpeaking() || window.speechSynthesis?.speaking || window.speechSynthesis?.pending) return;
@@ -109,15 +124,16 @@ function App() {
   }, [scene.state, direction, Math.round((nearestHand?.distance ?? 0) * 10)]);
   useEffect(() => { if (scene.state === 'done') vibrate([80,60,80]); }, [scene.state]);
   useEffect(() => {
-    if (!primary || primary.item.missing) return;
+    if (!targeted || !primary || primary.item.missing) return;
     const timer = setTimeout(() => vibrate(200), 1000);
     return () => clearTimeout(timer);
   }, [primary?.item.id, primary?.item.missing]);
   useEffect(() => {
     if (scene.state === 'lost' || (scene.state === 'searching' && now - searchStarted.current > 30000)) {
-      speak(`${scene.title}. ${scene.detail || ''}`);
+      speak(`${scene.title}. ${scene.detail || ''}`,undefined,{clipId:scene.state==='lost' ? `lost_turn_${scene.lostSide}` : 'search_timeout'});
     }
   }, [scene.state, scene.title]);
+  useEffect(()=>{if(voiceError)speak(voiceError);},[voiceError]);
 
   useEffect(() => {
     const element = video.current;
@@ -130,6 +146,7 @@ function App() {
   }, [started]);
 
   useEffect(() => () => {
+    clearTimeout(voiceStartTimer.current);
     const current = recognition.current;
     if (current) {
       current.onresult = null;
@@ -140,7 +157,20 @@ function App() {
     }
   }, []);
 
+  useEffect(()=>{
+    const hide=()=>{
+      if(!document.hidden)return;
+      clearTimeout(voiceStartTimer.current);voiceStartTimer.current=undefined;
+      const current=recognition.current;
+      if(current) {current.onend=current.onerror=current.onresult=null;current.abort();recognition.current=null;}
+      setListening(false);gripSuccess.current.reset();
+    };
+    document.addEventListener('visibilitychange',hide);
+    return ()=>document.removeEventListener('visibilitychange',hide);
+  },[]);
+
   useEffect(() => {
+    clearTimeout(voiceStartTimer.current); voiceStartTimer.current=undefined;
     const current = recognition.current;
     if (current) {
       current.onresult = current.onerror = current.onend = null;
@@ -154,7 +184,10 @@ function App() {
     setVoiceError(undefined);
     cancelSpeech();
     if (recognition.current) {
-      recognition.current.stop();
+      if(voiceStartTimer.current!==undefined) {
+        clearTimeout(voiceStartTimer.current);voiceStartTimer.current=undefined;
+        recognition.current=null;setListening(false);
+      } else recognition.current.stop();
       return;
     }
     const speechWindow = window as Window & {
@@ -197,16 +230,16 @@ function App() {
       if (!receivedResult && !failed) setVoiceError('음성이 들리지 않았어요. 다시 말씀해 주세요.');
     };
     recognition.current = current;
-    try {
-      current.start();
-      unlockFeedback(); listeningCue(true);
-      setListening(true);
-      setVoiceMessage('');
-    } catch {
-      recognition.current = null;
-      setListening(false);
-      setVoiceError('음성 인식을 시작하지 못했습니다. 다시 눌러 주세요.');
-    }
+    unlockFeedback(); listeningCue(true); setListening(true); setVoiceMessage('');
+    // The two cue tones finish after 190ms. Start recording after they stop.
+    voiceStartTimer.current=setTimeout(()=>{
+      voiceStartTimer.current=undefined;
+      if(recognition.current!==current)return;
+      if(document.hidden) {recognition.current=null;setListening(false);return;}
+      try {current.start();} catch {
+        recognition.current=null;setListening(false);setVoiceError('음성 인식을 시작하지 못했습니다. 다시 눌러 주세요.');
+      }
+    },250);
   }
 
   useEffect(() => {
@@ -263,7 +296,7 @@ function App() {
 
   return <main className={`camera-screen scene-${scene.state}`}>
     <video ref={video} autoPlay muted playsInline aria-label="카메라 미리보기" />
-    <button className="camera-tap-zone" type="button" tabIndex={-1} aria-hidden="true" disabled={search.busy} onClick={toggleVoice} />
+    <button className="camera-tap-zone" type="button" tabIndex={-1} aria-hidden="true" disabled={search.busy} onClick={()=>search.outcome==='done'?search.start():toggleVoice()} />
     <div className="detection-overlay" aria-hidden="true">
       {current.filter(({ item }) => item.id !== primary?.item.id).map(({ item, rect }) => <div key={item.id} className="detection-box detection-secondary" style={{ left: rect.x, top: rect.y, width: rect.width, height: rect.height }} />)}
       {primary && !lost && <div key={primary.item.id} className={`detection-box${primary.item.missing ? ' is-missing' : ''}`} style={{ left: primary.rect.x, top: primary.rect.y, width: primary.rect.width, height: primary.rect.height }}>
@@ -278,7 +311,7 @@ function App() {
         <span>{primary?.item.label === '컵' ? '손잡이' : '잡을 위치'}</span>
       </div>;
     })()}
-    {!personSelected && !lost && <HandOverlay hands={hands} source={source} viewport={screen} />}
+    {targeted && !lost && <HandOverlay hands={hands} source={source} viewport={screen} />}
     <CameraHUD scene={scene} heard={voiceMessage} active={session.running} onVoice={toggleVoice} onStop={() => { search.stop(); setVoiceMessage(''); setVoiceError(undefined); }} />
     {dev && <aside className="dev-panel" aria-label="개발 정보">
       <b>개발 정보</b>

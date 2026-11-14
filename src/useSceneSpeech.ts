@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
-import { isPrioritySpeaking } from './speech';
+import { isPrioritySpeaking, speak, cancelGuidance } from './speech';
+import { foundRecordingId } from './recordedSpeech';
 
 export function useSceneSpeech(target: { id: number; label: string } | undefined, guidance: string, listening: boolean) {
   const latest = useRef({ target, guidance, listening });
@@ -8,9 +9,9 @@ export function useSceneSpeech(target: { id: number; label: string } | undefined
   // Reset on every actual selection/loss, including gaps shorter than the speech timer.
   useEffect(() => {
     candidate.current = { id: target?.id, since: performance.now() };
+    cancelGuidance();
   }, [target?.id]);
   useEffect(() => {
-    if (!('speechSynthesis' in window)) return;
     let announced: number | undefined;
     let lastSpokenAt = -Infinity;
     const timer = window.setInterval(() => {
@@ -19,7 +20,7 @@ export function useSceneSpeech(target: { id: number; label: string } | undefined
       if (!recording && !document.hidden && isPrioritySpeaking()) return;
       if (document.hidden || recording || !current) {
         candidate.current = { id: undefined, since: now };
-        window.speechSynthesis.cancel();
+        cancelGuidance();
         return;
       }
       if (candidate.current.id !== current.id) candidate.current = { id: current.id, since: now };
@@ -28,14 +29,11 @@ export function useSceneSpeech(target: { id: number; label: string } | undefined
       if (!isNew && !text) return;
       const lastCharacter = current.label.charCodeAt(current.label.length - 1);
       const particle = lastCharacter >= 0xAC00 && lastCharacter <= 0xD7A3 && (lastCharacter - 0xAC00) % 28 !== 0 ? '을' : '를';
-      const utterance = new SpeechSynthesisUtterance(`${isNew ? `${current.label}${particle} 찾았어요. ` : ''}${text}`);
-      utterance.lang = 'ko-KR';
-      utterance.rate = 1;
-      // A blocked autoplay attempt is not a successful announcement. Retry after the cooldown.
-      utterance.onstart = () => { announced = current.id; };
       lastSpokenAt = now;
-      window.speechSynthesis.speak(utterance);
+      speak(isNew ? `${current.label}${particle} 찾았어요.` : text, reason => {
+        if(reason==='ended' && latest.current.target?.id===current.id) announced=current.id;
+      },{priority:'guidance',clipId:isNew?foundRecordingId(current.label):undefined});
     }, 100);
-    return () => { clearInterval(timer); window.speechSynthesis.cancel(); };
+    return () => { clearInterval(timer); cancelGuidance(); };
   }, []);
 }

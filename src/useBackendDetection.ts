@@ -1,10 +1,12 @@
-import { setServerSpeechEnabled } from './speech';
+import { setServerSpeechEnabled, speak } from './speech';
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { api, ApiError } from './api';
 import { abortableDelay } from './apiCore';
 import { captureFrame } from './capture';
 import { updateTracks, type DetectionTrack } from './detectionTracks';
 import { labels } from './useObjectDetection';
+import { colorMismatchText, createColorNoticeGate } from './colorNotice';
+import { isPersonLabel } from './objectFilter';
 
 export function useBackendDetection(video: RefObject<HTMLVideoElement | null>, cameraReady: boolean, running: boolean, targets: string[], objectKo: string, revision: number) {
   const [ready, setReady] = useState(false);
@@ -14,6 +16,7 @@ export function useBackendDetection(video: RefObject<HTMLVideoElement | null>, c
   const [detections, setDetections] = useState<DetectionTrack[]>([]);
   const nextId = useRef(1000000);
   const autoReconnectBudget = useRef(2);
+  const colorNotice = useRef(createColorNoticeGate());
   const targetKey = targets.join(',');
 
   useEffect(() => {
@@ -44,7 +47,8 @@ export function useBackendDetection(video: RefObject<HTMLVideoElement | null>, c
 
   useEffect(() => {
     setDetections([]);
-    if (!ready || !cameraReady || !running || !targetKey) return;
+    colorNotice.current.reset();
+    if (!ready || !cameraReady || !running) return;
     let disposed = false;
     let tracks: DetectionTrack[] = [];
     let frameController: AbortController | undefined;
@@ -58,14 +62,17 @@ export function useBackendDetection(video: RefObject<HTMLVideoElement | null>, c
       frameController = new AbortController();
       try {
         const image = await captureFrame(source, frameController.signal);
-        const results = await api.detect(image, targetKey.split(','), frameController.signal);
+        const response = await api.detect(image, targetKey ? targetKey.split(',') : [], frameController.signal);
+        const results = response.detections.filter(d => !isPersonLabel(d.label) && !isPersonLabel(d.target));
         if (disposed || frameController.signal.aborted || document.hidden) return;
-        const items = results.filter(d => d.score >= .65).map(d => ({
+        const items = results.filter(d => d.score >= .35).map(d => ({
           label: objectKo || labels[d.target] || labels[d.label] || d.label,
           score: d.score, x: d.box.x, y: d.box.y, width: d.box.w, height: d.box.h,
         }));
         tracks = updateTracks(tracks, items, performance.now(), () => nextId.current++, 3000);
         setDetections(tracks);
+        const notice = colorNotice.current.update(colorMismatchText(response, objectKo), performance.now());
+        if (targetKey && notice) speak(notice);
         setStatus(`백엔드 탐지 · ${results.length ? '물체 인식 중' : '대상을 찾고 있어요'}`);
       } catch (error) {
         if (disposed || frameController.signal.aborted) return;
@@ -84,7 +91,7 @@ export function useBackendDetection(video: RefObject<HTMLVideoElement | null>, c
       if (active.length !== tracks.length) { tracks = active; setDetections(tracks); }
     }, 250);
     const visibility = () => {
-      if (document.hidden) { frameController?.abort(); tracks = []; setDetections([]); }
+      if (document.hidden) { frameController?.abort(); tracks = []; setDetections([]); colorNotice.current.reset(); }
     };
     document.addEventListener('visibilitychange', visibility);
     void loop();
@@ -94,6 +101,6 @@ export function useBackendDetection(video: RefObject<HTMLVideoElement | null>, c
     };
   }, [ready, cameraReady, running, targetKey, objectKo, revision, video]);
 
-  return { active: ready && running && !!targetKey, detections, status, describeEnabled,
+  return { active: ready && running, detections, status, describeEnabled,
     reconnect: () => { autoReconnectBudget.current = 2; setRetry(value => value + 1); } };
 }

@@ -20,6 +20,16 @@ for (const file of files) {
   }
 }
 const html = await readFile(resolve(root, 'index.html'), 'utf8');
+const manifest = JSON.parse(await readFile(resolve(root,'audio/manifest.json'),'utf8'));
+files.push('audio/manifest.json');
+for (const [id,count] of Object.entries(manifest)) {
+  if(!/^[a-z0-9_]+$/.test(id)||!Number.isInteger(count)||count<1||count>50) throw new Error('Invalid audio manifest');
+  for(let n=1;n<=count;n++) {
+    const file=`audio/${id}_${n}.mp3`, buffer=await readFile(resolve(root,file));
+    if(buffer.length<128 || !(buffer.subarray(0,3).toString()==='ID3'||buffer[0]===255&&(buffer[1]&224)===224))throw new Error(`Invalid audio: ${file}`);
+    files.push(file);
+  }
+}
 const assets = [...html.matchAll(/(?:src|href)="\/?(assets\/[^"?#]+)(?:\?[^"#]*)?"/g)].map(match => match[1]);
 if (!assets.some(file => file.endsWith('.js'))) throw new Error('Built JavaScript bundle is missing');
 for (const file of assets) await stat(resolve(root, file));
