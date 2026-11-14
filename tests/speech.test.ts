@@ -76,6 +76,16 @@ test('recorded audio completion starts the pause; explicit cancellation resets i
   assert.equal(audioInstances.length,2);
 });
 
+test('repeated dynamic speech reuses generated audio without another TTS request', async () => {
+  let generated = 0;
+  const p = player(async () => {generated++; return new Blob(['audio'],{type:'audio/mpeg'});});
+  p.setServerSpeechEnabled(true);
+  p.speak('A dynamic warning'); await flush(); audioInstances[0].onended?.();
+  p.speak('A dynamic warning'); await flush();
+  assert.equal(generated,1);
+  assert.equal(audioInstances.length,2);
+});
+
 test('discovery interrupts search speech and completes before queued descriptions', () => {
   const p = player(); const results: string[] = [];
   p.speak('Searching', reason => results.push('search:' + reason));

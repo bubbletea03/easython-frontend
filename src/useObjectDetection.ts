@@ -1,8 +1,8 @@
-import { useEffect, useState, type RefObject } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { Detection } from '@mediapipe/tasks-vision';
 import { isPersonLabel } from './objectFilter';
 import { selectLargestHand } from './primaryHand';
-import { updateTracks, TRACK_HOLD_MS, type DetectionBox, type DetectionTrack } from './detectionTracks';
+import { updateTracks, type DetectionBox, type DetectionTrack } from './detectionTracks';
 import type { NormalizedLandmark } from '@mediapipe/tasks-vision';
 
 export const labels: Record<string, string> = {
@@ -30,10 +30,11 @@ export function useObjectDetection(video: RefObject<HTMLVideoElement | null>, ca
   const [hands, setHands] = useState<NormalizedLandmark[][]>([]);
   const [handMessage, setHandMessage] = useState('손 추적 준비 중');
   const targetKey = options.targets?.join(',') ?? '';
+  const latest = useRef({...options,targetKey}); latest.current = {...options,targetKey};
 
   useEffect(() => {
     setDetections([]); setHands([]);
-    if (!cameraReady || !options.enabled) return;
+    if (!cameraReady) return;
     setHandMessage('손 추적 준비 중');
     let disposed = false;
     let busy = false;
@@ -45,6 +46,7 @@ export function useObjectDetection(video: RefObject<HTMLVideoElement | null>, ca
     let tracks: DetectionTrack[] = [];
     let nextTrackId = 0;
     let lastHandsAt = 0;
+    let previousKey = '';
     let worker: Worker;
     setMessage('물체 인식 모델을 준비하고 있어요.');
     try {
@@ -76,12 +78,16 @@ export function useObjectDetection(video: RefObject<HTMLVideoElement | null>, ca
         setHands([]);
         setHandMessage('손 추적을 사용할 수 없어요. 새로고침해 주세요.');
         console.error('Hand tracking:', data.message);
+      } else if (data.type === 'object-error') {
+        setMessage('기기 내 물체 인식을 사용할 수 없어요. 서버 연결을 확인해 주세요.');
       } else if (data.type === 'result') {
         busy = false;
-        if (document.hidden) { tracks = []; setDetections([]); setHands([]); return; }
+        const {enabled,objects,targetKey} = latest.current;
+        if (document.hidden || !enabled) { tracks = []; setDetections([]); setHands([]); return; }
         setHands(selectLargestHand<NormalizedLandmark>(data.hands ?? []));
         lastHandsAt = performance.now();
-        const items: DetectionBox[] = (data.detections as Detection[]).flatMap(item => {
+        if (data.configKey !== `${objects}:${targetKey}`) return;
+        const items: DetectionBox[] = (objects ? data.detections as Detection[] : []).flatMap(item => {
           const box = item.boundingBox;
           const category = item.categories[0];
           if (!box || !category || category.score < 0.35 || isPersonLabel(category.categoryName)) return [];
@@ -92,7 +98,7 @@ export function useObjectDetection(video: RefObject<HTMLVideoElement | null>, ca
             x: box.originX / frameSize.width, y: box.originY / frameSize.height,
             width: box.width / frameSize.width, height: box.height / frameSize.height }];
         });
-        tracks = updateTracks(tracks, items, performance.now(), () => nextTrackId++);
+        tracks = updateTracks(tracks, items, performance.now(), () => nextTrackId++, 3000);
         setDetections(tracks);
         setMessage(items.length ? `${items.length}개 물체 탐지 중` : targetKey ? '로컬 지원 물체 중 대상을 찾고 있어요. 일부 물체는 서버 연결이 필요합니다.' : '물체를 찾고 있어요.');
       } else if (data.type === 'error') {
@@ -106,7 +112,7 @@ export function useObjectDetection(video: RefObject<HTMLVideoElement | null>, ca
     async function capture() {
       const source = video.current;
       const now = performance.now();
-      if (disposed || failed || !ready || busy || document.hidden || !source || source.paused || source.readyState < 2
+      if (disposed || failed || !ready || !latest.current.enabled || busy || document.hidden || !source || source.paused || source.readyState < 2
         || source.currentTime === lastVideoTime || now - lastFrameAt < 200) return;
       busy = true;
       lastVideoTime = source.currentTime;
@@ -117,13 +123,16 @@ export function useObjectDetection(video: RefObject<HTMLVideoElement | null>, ca
           resizeHeight: Math.max(1, Math.round(source.videoHeight * scale)) });
         if (disposed || failed) { bitmap.close(); return; }
         frameSize = { width: bitmap.width, height: bitmap.height };
-        worker.postMessage({ type: 'frame', frame: bitmap, timestamp: now }, [bitmap]);
+        worker.postMessage({ type: 'frame', frame: bitmap, timestamp: now, objects:latest.current.objects,
+          configKey:`${latest.current.objects}:${latest.current.targetKey}` }, [bitmap]);
       } catch {
         if (!disposed) fail();
       }
     }
     const timer = window.setInterval(() => {
-      const active = tracks.filter(track => performance.now() - track.lastSeen < TRACK_HOLD_MS);
+      const key = `${latest.current.enabled}:${latest.current.objects}:${latest.current.targetKey}`;
+      if (key !== previousKey) { previousKey = key; tracks = []; setDetections([]); if (!latest.current.enabled) setHands([]); }
+      const active = tracks.filter(track => performance.now() - track.lastSeen < 3000);
       if (lastHandsAt && performance.now() - lastHandsAt > 600) { setHands([]); lastHandsAt = 0; }
       if (active.length !== tracks.length) { tracks = active; setDetections(tracks); }
       void capture();
@@ -137,7 +146,7 @@ export function useObjectDetection(video: RefObject<HTMLVideoElement | null>, ca
       document.removeEventListener('visibilitychange', clearOnHide);
       worker.terminate();
     };
-  }, [video, cameraReady, options.enabled, options.objects, targetKey]);
+  }, [video, cameraReady]);
 
   return { detections, detectionMessage: message, hands, handMessage };
 }

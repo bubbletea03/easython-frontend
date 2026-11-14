@@ -6,6 +6,7 @@ export function screenDirection(dx: number, dy: number) {
   return Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up');
 }
 export const directionText = { left: '왼쪽으로', right: '오른쪽으로', up: '위쪽으로', down: '아래쪽으로' };
+export const handDirectionText = { left: '왼쪽으로', right: '오른쪽으로', up: '앞으로', down: '몸 쪽으로' };
 
 export function deriveScene(input: { listening: boolean; busy: boolean; running: boolean; cameraReady: boolean;
   cameraError: boolean; message: string; safety?: string; outcome: 'idle' | 'searching' | 'unknown' | 'done';
@@ -20,7 +21,7 @@ export function deriveScene(input: { listening: boolean; busy: boolean; running:
   if (!input.cameraReady) return { state: 'processing', status: '준비하고 있어요', title: '카메라를 준비하고 있어요' };
   if (!input.running) return { state: 'idle', status: '준비됐어요', title: '누르고 말하세요' };
   if (input.lost) return { state: 'lost', status: '놓쳤어요', title: input.lostSide ? `폰을 천천히 ${input.lostSide === 'left' ? '왼쪽' : '오른쪽'}으로 돌려주세요` : '폰을 천천히 돌려주세요', lostSide: input.lostSide };
-  if (input.found && input.guiding && input.centered !== false) return { state: 'guiding', status: '손 안내 중', title: input.direction ? directionText[input.direction] : '위치가 맞아요', direction: input.direction, detail: input.direction ? undefined : '아직 닿지 않았다면 손을 조금 더 뻗어 보세요.' };
+  if (input.found && input.guiding && input.centered !== false) return { state: 'guiding', status: '손 안내 중', title: input.direction ? handDirectionText[input.direction] : '위치가 맞아요', direction: input.direction, detail: input.direction ? undefined : '아직 닿지 않았다면 손을 조금 더 뻗어 보세요.' };
   if (input.found && input.centered === false) return { state: 'found', status: '가운데로 맞춰 주세요', title: input.direction ? `폰을 조금 ${directionText[input.direction]} 돌려주세요` : '물건을 가운데 칸에 맞춰 주세요', direction: input.direction };
   if (input.found) return { state: 'found', status: `${input.targetLabel} 찾았어요`, title: '물건이 가운데에 있어요', detail: '이제 손을 뻗어 주세요' };
   return { state: 'searching', status: `${input.targetLabel || '물건'} 찾는 중`, title: input.timedOut ? '주변에서 찾지 못했어요' : '폰을 천천히 돌려주세요', detail: input.timedOut ? '다른 방향을 비춰 보세요' : undefined };

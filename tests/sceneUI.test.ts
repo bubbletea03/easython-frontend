@@ -30,3 +30,10 @@ test('dominant screen direction does not infer metric distance', () => {
   assert.equal(screenDirection(100,-20),'right'); assert.equal(screenDirection(-10,-80),'up');
   assert.equal(screenDirection(5,4),undefined);
 });
+
+test('hand vertical guidance uses forward and toward the body, while phone alignment stays screen-relative', () => {
+  const found = {...idle,running:true,found:true,centered:true,guiding:true};
+  assert.equal(deriveScene({...found,direction:'up'}).title,'앞으로');
+  assert.equal(deriveScene({...found,direction:'down'}).title,'몸 쪽으로');
+  assert.match(deriveScene({...found,centered:false,direction:'up'}).title,/폰을.*위쪽/);
+});

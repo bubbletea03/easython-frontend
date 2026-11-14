@@ -10,7 +10,9 @@ export function colorMismatchText(result: DetectResult, objectKo: string) {
   const actual = typeof raw === 'string' ? colors[raw.toLowerCase()] : undefined;
   const object = objectKo || '요청하신 물체';
   const noun=objectKo.replace(/^(검은색?|검정색?|흰색?|하얀색?|빨간색?|파란색?|초록색?|노란색?|주황색?|보라색?|분홍색?|갈색|회색|은색|금색)\s*/,'') || '물체';
-  return `${object}는 못 찾았어요. ${actual ? `${actual} ${noun}도 보여요.` : '요청하신 색상과 다른 물체가 있어요.'}`;
+  const code = object.charCodeAt(object.length-1);
+  const particle = code >= 0xAC00 && code <= 0xD7A3 && (code-0xAC00)%28 !== 0 ? '은' : '는';
+  return `${object}${particle} 못 찾았어요. ${actual ? `${actual} ${noun}도 보여요.` : '요청하신 색상과 다른 물체가 있어요.'}`;
 }
 export function createColorNoticeGate() {
   let candidate: {text:string;since:number} | undefined;

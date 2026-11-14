@@ -1,4 +1,4 @@
-﻿import test from 'node:test';
+import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
@@ -11,7 +11,7 @@ test('grip coordinates refresh repeatedly without hiding the point or repeating 
     .replace(/^import .*;\r?\n/gm, '').replace('export function useSearchCommands', 'function useSearchCommands');
   const code = ts.transpile(source, {target:ts.ScriptTarget.ES2022, module:ts.ModuleKind.None});
   const effects: (() => void | (() => void))[] = [], states: unknown[] = [], spoken: string[] = [];
-  let now = 0, poll: () => void = () => {}, calls = 0;
+  let now = 0, poll: () => void = () => {}, calls = 0, cancellations = 0;
   let resolveRefresh: ((value: unknown) => void) | undefined;
   const selected = {current:{id:1,lastSeen:0,missing:false,label:'cup',score:1,x:0,y:0,width:1,height:1}};
   const savedDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
@@ -25,7 +25,7 @@ test('grip coordinates refresh repeatedly without hiding the point or repeating 
     useEffect:(effect:()=>void)=>effects.push(effect),
     api:{describe:async()=>{calls++;if(calls===1)return {grasp:'Hold here',sentences:['Hold here'],handlePoint:{x:.2,y:.3}};return new Promise(resolve=>{resolveRefresh=resolve;});}},
     captureFrame:async()=>new Blob(),captureRegion:()=>({x:0,y:0,width:1,height:1}),
-    speak:(text:string)=>spoken.push(text),cancelSpeech:()=>{},isPrioritySpeaking:()=>false,
+    speak:(text:string)=>spoken.push(text),cancelSpeech:()=>{cancellations++;},isPrioritySpeaking:()=>false,
     createAutoGripGate,relativeHandlePoint,followHandlePoint,findRecordingId:()=>undefined,
   };
   const hook = new Function(...Object.keys(dependencies), code+'; return useSearchCommands;')(...Object.values(dependencies));
@@ -36,24 +36,26 @@ test('grip coordinates refresh repeatedly without hiding the point or repeating 
     const tick=async(t:number)=>{now=t;selected.current.lastSeen=t;poll();await new Promise(resolve=>setImmediate(resolve));};
     await tick(0);await tick(1500);await tick(3000);
     assert.equal(calls,1);assert.deepEqual(states[5],{u:.2,v:.3,targetId:1});
-    await tick(6000);
+    assert.equal(states[4],false);assert.equal(cancellations,0);
+    await tick(12999);assert.equal(calls,1);await tick(13000);
     assert.equal(calls,2);assert.deepEqual(states[5],{u:.2,v:.3,targetId:1});
-    await tick(6500);assert.equal(calls,2);
+    await tick(13500);assert.equal(calls,2);
     resolveRefresh?.({sentences:['Do not repeat'],handlePoint:{x:.7,y:.8}});
     await new Promise(resolve=>setImmediate(resolve));
     assert.deepEqual(states[5],{u:.7,v:.8,targetId:1});assert.deepEqual(spoken,['Hold here']);
-    await tick(9500);assert.equal(calls,3);
+    await tick(23500);assert.equal(calls,3);
     resolveRefresh?.({sentences:['Sharp edge'],hazard:'sharp',safety:'Sharp edge',handlePoint:{x:.6,y:.7}});
     await new Promise(resolve=>setImmediate(resolve));
     assert.equal(states[2],'Sharp edge');
     assert.deepEqual(spoken,['Hold here','Sharp edge']);
-    await tick(12500);assert.equal(calls,4);
+    await tick(33500);assert.equal(calls,4);
     resolveRefresh?.({sentences:[],hazard:'sharp',safety:'Same hazard, different wording',handlePoint:{x:.5,y:.6}});
     await new Promise(resolve=>setImmediate(resolve));
     assert.deepEqual(spoken,['Hold here','Sharp edge']);
-    await tick(15500);assert.equal(calls,5);
+    await tick(43500);assert.equal(calls,5);
     selected.current.missing=true;
-    await tick(15600);
+    selected.current.lastSeen=41500;
+    now=43501;poll();await new Promise(resolve=>setImmediate(resolve));
     resolveRefresh?.({sentences:[],handlePoint:{x:.1,y:.1}});
     await new Promise(resolve=>setImmediate(resolve));
     assert.equal(states[5],undefined);

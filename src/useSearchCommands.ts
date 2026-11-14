@@ -7,8 +7,9 @@ import { createAutoGripGate } from './autoGrip';
 import { relativeHandlePoint, followHandlePoint } from './gripGeometry';
 import { findRecordingId } from './recordedSpeech';
 
-export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, selected: RefObject<DetectionTrack | undefined>, describeEnabled: RefObject<boolean | undefined>, autoDescribeEnabled: RefObject<boolean>) {
+export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, selected: RefObject<DetectionTrack | undefined>, describeEnabled: RefObject<boolean | undefined>, autoDescribeEnabled: RefObject<boolean>, position?: RefObject<{text:string;clipId?:string} | undefined>) {
   const [session, setSession] = useState({ running: false, targets: [] as string[], objectKo: '', revision: 0 });
+  const latestSession = useRef(session); latestSession.current = session;
   const [outcome, setOutcome] = useState<'idle' | 'searching' | 'unknown' | 'done'>('idle');
   const [safety, setSafety] = useState<string>();
   const [message, setMessage] = useState('');
@@ -25,6 +26,16 @@ export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, sel
   const warned = useRef(new Set<string>());
   const alive = useRef(true);
   const notify = (text: string, onFinish?: () => void) => { setMessage(text); speak(text, onFinish); };
+  function cancelPending() {
+    generation.current++; controller.current?.abort(); controller.current = undefined;
+    describeLock.current = false; describeTarget.current = undefined; setBusy(false);
+    nextRefreshAt.current = performance.now() + 10000;
+  }
+  function where() {
+    const reply = latestSession.current.running ? position?.current : undefined;
+    const text = reply?.text || (latestSession.current.running ? '아직 찾고 있어요. 폰을 천천히 돌려 주세요.' : '먼저 찾을 물건을 말씀해 주세요.');
+    setMessage(text); speak(text,undefined,{clipId:reply ? reply.clipId : latestSession.current.running ? 'where_searching' : 'no_task_where'});
+  }
   function cancel(stopSpeech = true) {
     generation.current++; controller.current?.abort(); controller.current = undefined;
     describeLock.current = false; describeTarget.current = undefined; handleTarget.current = undefined; setBusy(false); setHandlePoint(undefined); setSafety(undefined);
@@ -38,6 +49,12 @@ export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, sel
     setOutcome('idle');
     setMessage('');
     setSession(s => ({ running: false, targets: [], objectKo: '', revision: s.revision + 1 }));
+  }
+  function timeout() {
+    cancel(); setOutcome('unknown');
+    setSession(s=>({...s,running:false,revision:s.revision+1}));
+    const text = '이 주변에서는 찾지 못했어요. 다시 찾으려면 말하기 버튼을 눌러 주세요.';
+    setMessage(text); speak(text,undefined,{clipId:'search_timeout'});
   }
   function unknown(text: string) {
     cancel(); setOutcome('unknown'); setSession(s => ({ ...s, running: false, revision: s.revision + 1 })); notify(text);
@@ -55,10 +72,10 @@ export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, sel
   async function describe(automatic = false, refresh = false) {
     if (describeLock.current) return;
     const item = selected.current;
-    if (!item || item.missing) { if (!refresh) notify('먼저 물체를 카메라에 비춰 주세요.'); return; }
-    if (describeEnabled.current === false) { if (!refresh) notify('서버의 설명 기능이 비활성화되어 있습니다. 물체 탐지는 계속합니다.'); return; }
+    if (!item || item.missing) { if (!automatic) notify('먼저 물체를 카메라에 비춰 주세요.'); return; }
+    if (describeEnabled.current === false) { if (!automatic) notify('서버의 설명 기능이 비활성화되어 있습니다. 물체 탐지는 계속합니다.'); return; }
     // Coordinate refreshes preserve the displayed point and ongoing guidance.
-    if (!refresh) cancel();
+    if (!automatic) cancelPending();
     describeLock.current = true;
     describeTarget.current = item.id;
     autoGrip.current.mark();
@@ -66,13 +83,13 @@ export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, sel
     nextRefreshAt.current = Infinity;
     const token = generation.current;
     const request = new AbortController(); controller.current = request;
-    if (!refresh) { setBusy(true); setMessage('잡는 방법을 확인하고 있어요.'); }
+    if (!automatic) { setBusy(true); notify('잡는 방법을 확인하고 있어요.'); }
     try {
       if (!video.current) throw new Error('카메라를 준비해 주세요.');
       const region=captureRegion(item);
       const image = await captureFrame(video.current, request.signal, region);
-      const result = await api.describe(image, request.signal);
-      if (!alive.current || document.hidden || request.signal.aborted || generation.current !== token || selected.current?.id !== item.id || selected.current.missing) return;
+      const result = await api.describe(image, request.signal, latestSession.current.objectKo || item.label);
+      if (!alive.current || document.hidden || request.signal.aborted || generation.current !== token || selected.current?.id !== item.id || (selected.current.missing && performance.now()-selected.current.lastSeen >= 2000)) return;
       const relative = result.handlePoint && relativeHandlePoint(followHandlePoint({u:result.handlePoint.x,v:result.handlePoint.y},region), item);
       if (relative) { setHandlePoint({ ...relative, targetId: item.id }); handleTarget.current = item.id; }
       const warningKey = result.hazard || result.safety;
@@ -87,15 +104,17 @@ export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, sel
       }
       if (refresh) return;
       const rest = (automatic ? [result.grasp].filter((text): text is string => !!text) : result.sentences).filter(sentence=>sentence!==result.safety).join(' ');
-      if (rest) notify(rest);
-      else if (!result.safety) notify('이 사진에서는 잡는 방법을 확인할 수 없어요.');
+      if (rest) {
+        if (automatic) speak(rest,undefined,{priority:'guidance'});
+        else notify(rest);
+      } else if (!automatic && !result.safety) notify('이 사진에서는 잡는 방법을 확인할 수 없어요.');
     } catch (error) {
-      if (!refresh && !request.signal.aborted && generation.current === token && alive.current) notify(error instanceof Error ? error.message : '설명을 가져오지 못했습니다.');
+      if (!automatic && !request.signal.aborted && generation.current === token && alive.current) notify(error instanceof Error ? error.message : '설명을 가져오지 못했습니다.');
     } finally {
       if (generation.current === token && alive.current) {
         describeLock.current = false; describeTarget.current = undefined; controller.current = undefined;
-        nextRefreshAt.current = performance.now() + 3000;
-        if (!refresh) setBusy(false);
+        nextRefreshAt.current = performance.now() + 10000;
+        if (!automatic) setBusy(false);
       }
     }
   }
@@ -106,10 +125,10 @@ export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, sel
   useEffect(() => {
     const timer = setInterval(() => {
       const item = selected.current;
-      if (describeTarget.current !== undefined && (!item || item.missing || item.id !== describeTarget.current || performance.now() - item.lastSeen > 2000)) {
-        cancel(false); nextRefreshAt.current = performance.now() + 3000;
+      if (describeTarget.current !== undefined && (!item || item.id !== describeTarget.current || performance.now() - item.lastSeen >= 2000)) {
+        cancelPending();
       }
-      if (handleTarget.current !== undefined && (!item || item.missing || item.id !== handleTarget.current)) {
+      if (handleTarget.current !== undefined && (!item || performance.now()-item.lastSeen >= 2000 || item.id !== handleTarget.current)) {
         handleTarget.current = undefined; setHandlePoint(undefined); setSafety(undefined);
       }
       const enabled = autoDescribeEnabled.current && describeEnabled.current === true && !document.hidden;
@@ -128,17 +147,19 @@ export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, sel
     if (!trimmed) return;
     // An explicit stop must work even if the server is offline.
     if (/^(그만|그만해|멈춰|중지|정지|stop)[.!?\s]*$/i.test(trimmed)) { stop(); return; }
-    if (/^(잡았어|잡았어요|잡았습니다)[.!?\s]*$/.test(trimmed)) {
+    if (/^(?:.+\s+)?잡았(?:어|어요|습니다)[.!?\s]*$/.test(trimmed)) {
       cancel(); setOutcome('done'); setSession(s => ({ ...s, running: false, revision: s.revision + 1 }));
       notify('잡았다고 말씀하셨어요. 탐색을 마칩니다.'); return;
     }
-    cancel(); const token = generation.current;
+    if (/^(?:지금\s*)?어디\s*(?:있어|있어요|있나요)?[.!?\s]*$/.test(trimmed)) { cancelPending(); where(); return; }
+    cancelPending(); const token = generation.current;
     const request = new AbortController(); controller.current = request;
-    setBusy(true); setMessage('명령을 이해하고 있어요.');
+    setBusy(true); notify('명령을 이해하고 있어요.');
     try {
       const result = await api.parse(trimmed, request.signal);
       if (!alive.current || request.signal.aborted || token !== generation.current) return;
       if (result.intent === 'stop') stop();
+      else if (result.intent === 'where' && latestSession.current.running && (!result.targets.length || result.targets.every(t => latestSession.current.targets.includes(t)))) where();
       else if (result.intent === 'find' || result.intent === 'where') {
         if (result.targets.length) find(result.targets, result.object_ko || '');
         else unknown('찾을 물체를 이해하지 못했어요. 다른 이름으로 말씀해 주세요.');
@@ -159,5 +180,5 @@ export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, sel
     const timer = setTimeout(() => setSafety(undefined), 5000);
     return () => clearTimeout(timer);
   }, [safety]);
-  return { session, message, busy, handlePoint, safety, outcome, command, start, stop, find, describe };
+  return { session, message, busy, handlePoint, safety, outcome, command, start, stop, find, describe, cancelPending, timeout };
 }

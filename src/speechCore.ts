@@ -15,6 +15,8 @@ export function createSpeechPlayer(tts: (text: string, signal: AbortSignal) => P
   let activePriority = -1;
   let queue: Job[] = [];
   let quietUntil = 0;
+  const ttsCache = new Map<string, Blob>();
+  let cachedBytes = 0;
   const isSpeechPaused = () => performance.now() < quietUntil;
 
   function resumeQueue() {
@@ -80,7 +82,18 @@ export function createSpeechPlayer(tts: (text: string, signal: AbortSignal) => P
       if (request.signal.aborted || token !== generation) return;
       if (clip) return clip;
       if (!serverEnabled) { fallback(); return; }
-      return tts(text, request.signal);
+      const cached = ttsCache.get(text);
+      if (cached) return cached;
+      const generated = await tts(text, request.signal);
+      if (request.signal.aborted || token !== generation) return;
+      if (generated.size <= 8 * 1024 * 1024) {
+        ttsCache.set(text, generated); cachedBytes += generated.size;
+        while (ttsCache.size > 32 || cachedBytes > 8 * 1024 * 1024) {
+          const first = ttsCache.keys().next().value!;
+          cachedBytes -= ttsCache.get(first)!.size; ttsCache.delete(first);
+        }
+      }
+      return generated;
     })().then(async blob => {
       if (!blob) return;
       if (token !== generation || request.signal.aborted) return;

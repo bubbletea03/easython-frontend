@@ -70,10 +70,11 @@ test('parse sends text once; disabled describe capability is not a parse readine
 });
 test('describe reads nested result safely, prioritizes safety and never accepts arbitrary coordinates', async () => {
   const api = client(async (_url,init) => {
-    assert.equal((init?.body as FormData).has('prompt'),true);
+    assert.equal((init?.body as FormData).has('prompt'),false);
+    assert.equal((init?.body as FormData).get('target'),'리모컨');
     return response({ result: { hazard:'hot',safety:'뜨거워요.',grasp:'손잡이',comment:'컵',handle_point:{x:.8,y:.5} }, grasp:'wrong' });
   });
-  const result = await api.describe(new Blob());
+  const result = await api.describe(new Blob(),undefined,'리모컨');
   assert.deepEqual(result.sentences,['뜨거워요.','손잡이','컵']); assert.deepEqual(result.handlePoint,{x:.8,y:.5});
   assert.deepEqual(readDescription([{grasp:'손잡이를 잡아 주세요.'}]),{sentences:['손잡이를 잡아 주세요.'],grasp:'손잡이를 잡아 주세요.'});
   assert.equal(readDescription([{handle_point:{x:.2,y:.3}},{handle_point:{x:.8,y:.5}}]).handlePoint,undefined);
@@ -94,4 +95,13 @@ test('TTS times out after three seconds and does not queue a delayed rate-limit 
   await assert.rejects(pending,(error:ApiError)=>error.code==='timeout');
   let calls=0;const limited=client(async()=>{calls++;return response({error:{code:'rate_limited'}},429,{'Retry-After':'30'});});
   await assert.rejects(limited.tts('테스트'));assert.equal(calls,1);
+});
+
+test('parse times out at fifteen seconds and never waits through a rate-limit retry',async context=>{
+  context.mock.timers.enable({apis:['setTimeout']});
+  const api=client(async(_url,init)=>new Promise((_resolve,reject)=>init?.signal?.addEventListener('abort',()=>reject(new Error('abort')))));
+  const pending=api.parse('Find cup');context.mock.timers.tick(15000);
+  await assert.rejects(pending,(error:ApiError)=>error.code==='timeout');
+  let calls=0;const limited=client(async()=>{calls++;return response({error:{code:'rate_limited'}},429,{'Retry-After':'60'});});
+  await assert.rejects(limited.parse('Find cup'));assert.equal(calls,1);
 });

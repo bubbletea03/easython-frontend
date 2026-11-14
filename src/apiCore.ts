@@ -39,7 +39,7 @@ const messages: Record<string, string> = {
 };
 export function createApiClient(config: { baseUrl: string; apiKey: string; requireApiKey?: boolean; clientId: () => string; fetcher?: typeof fetch }) {
   const fetcher = config.fetcher ?? fetch;
-  async function request(path: string, options: RequestInit = {}, signal?: AbortSignal, timeout = 20000, audio = false): Promise<unknown> {
+  async function request(path: string, options: RequestInit = {}, signal?: AbortSignal, timeout = 20000, audio = false, retry429 = true): Promise<unknown> {
     if (config.requireApiKey !== false && !config.apiKey.trim()) throw new ApiError('API 키를 설정해 주세요. 로컬 인식을 사용합니다.', 401, 'unauthorized');
     let clientId: string;
     try { clientId = config.clientId(); }
@@ -61,7 +61,7 @@ export function createApiClient(config: { baseUrl: string; apiKey: string; requi
       } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
       signal?.throwIfAborted();
       if (response.ok) return body;
-      if (response.status === 429 && attempt === 0 && !audio) { await abortableDelay(retryAfterMs(response.headers.get('Retry-After')), signal); continue; }
+      if (response.status === 429 && attempt === 0 && !audio && retry429) { await abortableDelay(Math.min(5000, retryAfterMs(response.headers.get('Retry-After'))), signal); continue; }
       const error = record(body) && record(body.error) ? body.error : {};
       const code = typeof error.code === 'string' ? error.code : `http_${response.status}`;
       const message = response.status === 401 ? 'API 키 설정을 확인해 주세요.'
@@ -101,14 +101,14 @@ export function createApiClient(config: { baseUrl: string; apiKey: string; requi
       return b as DetectResult;
     },
     async parse(text: string, signal?: AbortSignal): Promise<ParseResult> {
-      const b = await request('/parse', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) }, signal, 45000);
+      const b = await request('/parse', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) }, signal, 15000, false, false);
       if (!record(b) || !['find','where','how','stop','unknown'].includes(String(b.intent)) || !(b.object_ko === null || typeof b.object_ko === 'string')
         || !Array.isArray(b.targets) || b.targets.length > 3 || !b.targets.every(t => typeof t === 'string' && /^[a-z0-9][a-z0-9 '\-]{0,49}$/i.test(t))) throw invalid();
       return b as ParseResult;
     },
-    async describe(image: Blob, signal?: AbortSignal): Promise<Description> {
+    async describe(image: Blob, signal?: AbortSignal, target = '물건'): Promise<Description> {
       const form = new FormData(); form.append('image', image, 'capture.jpg');
-      form.append('prompt', 'Return JSON with hazard, safety, grasp, comment, handle_point {x,y} normalized coordinates, and confidence (high or low). All sentences must be short, polite Korean. hazard must be hot (visible steam or boiling), spill (full drink), edge (table edge), broken (visible breakage), sharp (exposed blade), or null, based only on visible evidence. safety must be one short sentence only when hazard is present, otherwise null. Exclude generic cautions about screens, charging, or dropping. Never claim safe or not hot. grasp and comment must each be one short sentence.');
+      form.append('target', target.trim() || '물건');
       const b = await request('/describe', { method: 'POST', body: form }, signal, 45000);
       if (!record(b) || !(record(b.result) || Array.isArray(b.result))) throw invalid();
       return readDescription(b.result);
