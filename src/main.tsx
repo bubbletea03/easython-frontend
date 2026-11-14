@@ -137,7 +137,7 @@ function App() {
     const event = targetChoices.current.update(current,now,session.revision,
       session.running && targeted && !listening && !search.busy && !search.safety && !document.hidden && !isPrioritySpeaking());
     if (event?.type === 'ask') {
-      const text = '같은 물건이 두 개 보여요. 왼쪽과 오른쪽 중 어느 쪽인가요?';
+      const text = '같은 물건이 두 개 보여요. 잠시 후 더 크게 보이는 물건으로 안내할게요.';
       setChoicePrompt(text);
       speak(text,()=>targetChoices.current.startDeadline(performance.now()));
     } else if (event?.type === 'choose') {
@@ -234,6 +234,7 @@ function App() {
   }, [session.revision]);
 
   function toggleVoice() {
+    if (!listening && (session.running || search.busy)) { stop(); return; }
     unlockFeedback();
     if (!cameraReady) {
       if (cameraError) { setCameraAttempt(value=>value+1); }
@@ -405,7 +406,7 @@ function App() {
       </div>;
     })()}
     {targeted && !lost && <HandOverlay hands={hands} source={source} viewport={screen} />}
-    <CameraHUD scene={choicePrompt && !search.safety ? {...scene,title:choicePrompt,detail:'왼쪽 또는 오른쪽이라고 말씀해 주세요.',direction:undefined} : scene} heard={voiceMessage} active={session.running} onVoice={toggleVoice} onStop={stop} />
+    <CameraHUD scene={choicePrompt && !search.safety ? {...scene,title:choicePrompt,detail:'답이 없으면 더 크게 보이는 물건으로 안내할게요.',direction:undefined} : scene} heard={voiceMessage} active={session.running} pending={search.busy} onVoice={toggleVoice} onStop={stop} />
     {dev && <aside className="dev-panel" aria-label="개발 정보">
       <b>개발 정보</b>
       <p>{backend.status}</p><p>{handMessage}</p><p>{detectionMessage}</p>

@@ -13,13 +13,21 @@ const compile = (path:string, name:string, dependencies: Record<string,unknown>)
 };
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
 
-test('active and processing screens retain microphone access and a separate cancellation button', () => {
+test('the voice button stops an active search or pending request and becomes a microphone again in idle', () => {
   const CameraHUD=compile('../src/CameraHUD.tsx','CameraHUD',{React,designIcons:{mic:'',stop:'',listening:''}});
+  const buttons=(node:any):any[]=>Array.isArray(node)?node.flatMap(buttons):React.isValidElement(node)?[(node.type==='button'?node:undefined),...buttons((node.props as any).children)].filter(Boolean):[];
   for(const state of ['found','guiding','processing','warning']) {
-    const html=renderToStaticMarkup(React.createElement(CameraHUD,{scene:{state,title:'Test',status:'Test'},heard:'',active:state!=='processing',onStop(){},onVoice(){}}));
-    assert.match(html,/aria-label="말하기/);
+    let stopped=0,heard=0;
+    const props={scene:{state,title:'Test',status:'Test'},heard:'',active:state!=='processing',pending:state==='processing',onStop(){stopped++;},onVoice(){heard++;}};
+    const html=renderToStaticMarkup(React.createElement(CameraHUD,props));
     assert.match(html,/aria-label="그만/);
+    assert.doesNotMatch(html,/stop-button/);
     assert.doesNotMatch(html,/disabled/);
+    const controls=buttons(CameraHUD(props));assert.equal(controls.length,1);
+    controls[0].props.onClick();assert.equal(stopped,1);assert.equal(heard,0);
+    const idle={...props,active:false,pending:false,scene:{state:'idle',title:'Ready',status:'Ready'}};
+    buttons(CameraHUD(idle))[0].props.onClick();assert.equal(heard,1);
+    assert.match(renderToStaticMarkup(React.createElement(CameraHUD,idle)),/aria-label="말하기/);
   }
 });
 
