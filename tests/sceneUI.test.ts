@@ -46,3 +46,15 @@ test('locked hand guidance ignores the center cell, but an unknown sharp handle 
   assert.equal(waiting.state,'found');assert.equal(waiting.title,'손잡이를 확인하고 있어요');assert.equal(waiting.direction,undefined);
   assert.equal(deriveScene({...found,safety:'멈추세요. 칼날 쪽이에요.'}).state,'warning');
 });
+
+test('the find, align and reach steps follow the scene, and scenes outside the flow have none', () => {
+  const running = {...idle,running:true};
+  assert.equal(deriveScene(running).step,1);
+  assert.equal(deriveScene({...running,lost:true}).step,1);
+  assert.equal(deriveScene({...running,found:true,centered:false,direction:'left'}).step,2);
+  assert.equal(deriveScene({...running,found:true,centered:true}).step,2);
+  assert.equal(deriveScene({...running,found:true,centered:true,guiding:true}).step,3);
+  assert.equal(deriveScene({...running,found:true,centered:false,handPhase:true,guiding:true,direction:'left'}).step,3);
+  assert.equal(deriveScene({...running,found:true,centered:false,handPhase:true}).step,3);
+  for (const scene of [deriveScene(idle),deriveScene({...idle,listening:true}),deriveScene({...running,safety:'뜨거워요'}),deriveScene({...idle,outcome:'done'})]) assert.equal(scene.step,undefined);
+});
