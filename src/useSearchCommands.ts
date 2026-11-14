@@ -20,11 +20,14 @@ export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, sel
   const describeLock = useRef(false);
   const describeTarget = useRef<number | undefined>(undefined);
   const autoGrip = useRef(createAutoGripGate());
+  const refreshReady = useRef(false);
+  const nextRefreshAt = useRef(Infinity);
   const alive = useRef(true);
   const notify = (text: string, onFinish?: () => void) => { setMessage(text); speak(text, onFinish); };
-  function cancel() {
+  function cancel(stopSpeech = true) {
     generation.current++; controller.current?.abort(); controller.current = undefined;
-    describeLock.current = false; describeTarget.current = undefined; handleTarget.current = undefined; setBusy(false); setHandlePoint(undefined); setSafety(undefined); cancelSpeech();
+    describeLock.current = false; describeTarget.current = undefined; handleTarget.current = undefined; setBusy(false); setHandlePoint(undefined); setSafety(undefined);
+    if (stopSpeech) cancelSpeech();
   }
   function stop() {
     cancel(); setOutcome('idle'); setSession(s => ({ ...s, running: false, revision: s.revision + 1 })); notify('안내를 멈췄어요.');
@@ -53,17 +56,21 @@ export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, sel
     const text=`${objectKo || cleaned.join(', ')} 찾을게요. 폰을 천천히 돌려주세요.`;
     setMessage(text);speak(text,undefined,{clipId:findRecordingId(objectKo)});
   }
-  async function describe(automatic = false) {
+  async function describe(automatic = false, refresh = false) {
     if (describeLock.current) return;
     const item = selected.current;
-    if (!item || item.missing) { notify('먼저 물체를 카메라에 비춰 주세요.'); return; }
-    if (describeEnabled.current === false) { notify('서버의 설명 기능이 비활성화되어 있습니다. 물체 탐지는 계속합니다.'); return; }
-    cancel(); describeLock.current = true;
+    if (!item || item.missing) { if (!refresh) notify('먼저 물체를 카메라에 비춰 주세요.'); return; }
+    if (describeEnabled.current === false) { if (!refresh) notify('서버의 설명 기능이 비활성화되어 있습니다. 물체 탐지는 계속합니다.'); return; }
+    // Coordinate refreshes preserve the displayed point and ongoing guidance.
+    if (!refresh) cancel();
+    describeLock.current = true;
     describeTarget.current = item.id;
     autoGrip.current.mark();
+    refreshReady.current = true;
+    nextRefreshAt.current = Infinity;
     const token = generation.current;
     const request = new AbortController(); controller.current = request;
-    setBusy(true); setMessage('잡는 방법을 확인하고 있어요.');
+    if (!refresh) { setBusy(true); setMessage('잡는 방법을 확인하고 있어요.'); }
     try {
       if (!video.current) throw new Error('카메라를 준비해 주세요.');
       const region=captureRegion(item);
@@ -72,6 +79,7 @@ export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, sel
       if (!alive.current || document.hidden || request.signal.aborted || generation.current !== token || selected.current?.id !== item.id || selected.current.missing) return;
       const relative = result.handlePoint && relativeHandlePoint(followHandlePoint({u:result.handlePoint.x,v:result.handlePoint.y},region), item);
       if (relative) { setHandlePoint({ ...relative, targetId: item.id }); handleTarget.current = item.id; }
+      if (refresh) return;
       setSafety(result.safety);
       if (result.safety) {
         setMessage(result.safety);
@@ -82,20 +90,33 @@ export function useSearchCommands(video: RefObject<HTMLVideoElement | null>, sel
         if(rest) speak(rest);
       } else notify((automatic ? result.grasp : result.sentences.join(' ')) || '이 사진에서는 잡는 방법을 확인할 수 없어요.');
     } catch (error) {
-      if (!request.signal.aborted && generation.current === token && alive.current) notify(error instanceof Error ? error.message : '설명을 가져오지 못했습니다.');
+      if (!refresh && !request.signal.aborted && generation.current === token && alive.current) notify(error instanceof Error ? error.message : '설명을 가져오지 못했습니다.');
     } finally {
-      if (generation.current === token && alive.current) { describeLock.current = false; describeTarget.current = undefined; setBusy(false); }
+      if (generation.current === token && alive.current) {
+        describeLock.current = false; describeTarget.current = undefined; controller.current = undefined;
+        nextRefreshAt.current = performance.now() + 3000;
+        if (!refresh) setBusy(false);
+      }
     }
   }
-  useEffect(() => { autoGrip.current.reset(); }, [session.revision]);
+  useEffect(() => {
+    autoGrip.current.reset(); refreshReady.current = false; nextRefreshAt.current = Infinity;
+  }, [session.revision]);
   useEffect(() => {
     const timer = setInterval(() => {
       const item = selected.current;
-      if (describeTarget.current !== undefined && (!item || item.missing || item.id !== describeTarget.current || performance.now() - item.lastSeen > 2000)) cancel();
+      if (describeTarget.current !== undefined && (!item || item.missing || item.id !== describeTarget.current || performance.now() - item.lastSeen > 2000)) {
+        cancel(false); nextRefreshAt.current = performance.now() + 3000;
+      }
       if (handleTarget.current !== undefined && (!item || item.missing || item.id !== handleTarget.current)) {
         handleTarget.current = undefined; setHandlePoint(undefined); setSafety(undefined);
       }
       const enabled = autoDescribeEnabled.current && describeEnabled.current === true && !document.hidden;
+      if (enabled && refreshReady.current && !describeLock.current && item && !item.missing
+        && performance.now() - item.lastSeen <= 2000 && performance.now() >= nextRefreshAt.current) {
+        void describe(true, true);
+        return;
+      }
       // Automatic descriptions must not cancel the discovery announcement.
       if (!isPrioritySpeaking() && autoGrip.current.update(item, performance.now(), enabled) && !describeLock.current) void describe(true);
     }, 100);
