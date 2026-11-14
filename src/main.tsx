@@ -1,82 +1,204 @@
-import { StrictMode, useEffect, useRef, useState } from 'react';
+﻿import { StrictMode, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { detect } from './api';
 import './style.css';
+import { useObjectDetection } from './useObjectDetection';
+import { HandOverlay } from './HandOverlay';
+import { fingerGuidance, projectBox, projectPoint } from './sceneGeometry';
+import { useSceneSpeech } from './useSceneSpeech';
 
-const targets = [['cup', '컵'], ['bottle', '물병'], ['cell phone', '휴대폰'], ['book', '책'], ['remote', '리모컨']];
+type VoiceRecognition = {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  onresult: ((event: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null;
+  onerror: ((event: { error: string }) => void) | null;
+  onend: (() => void) | null;
+  start(): void;
+  stop(): void;
+  abort(): void;
+};
+
 function App() {
-  const [target, setTarget] = useState('cup');
-  const [camera, setCamera] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState('찾을 물건을 선택하고 카메라를 켜 주세요.');
-  const [sound, setSound] = useState(true);
   const video = useRef<HTMLVideoElement>(null);
-  const stream = useRef<MediaStream | null>(null);
-  const mounted = useRef(true);
-  const starting = useRef(false);
+  const [status, setStatus] = useState('카메라를 준비하고 있습니다.');
+  const recognition = useRef<VoiceRecognition | null>(null);
+  const [listening, setListening] = useState(false);
+  const [voiceMessage, setVoiceMessage] = useState('');
+  const [cameraReady, setCameraReady] = useState(false);
+  const [viewport, setViewport] = useState({ width: 1, height: 1 });
+  const { detections, detectionMessage, hands, handMessage } = useObjectDetection(video, cameraReady);
+  const source = { x: 0, y: 0, width: video.current?.videoWidth || 1, height: video.current?.videoHeight || 1 };
+  const screen = { x: 0, y: 0, ...viewport };
+  const visible = detections.map(item => ({ item, rect: projectBox(item, source, screen) }))
+    .filter(({ rect }) => rect.width > 0 && rect.height > 0);
+  const current = visible.filter(({ item }) => !item.missing);
+  const primary = (current.length ? current : visible).sort((a,b) => b.rect.width * b.rect.height - a.rect.width * a.rect.height)[0];
+  const personSelected = primary?.item.label === '사람';
+  const nearestHand = primary && !primary.item.missing && !personSelected ? hands.map(hand => {
+    const thumb = projectPoint(hand[4], source, screen);
+    const index = projectPoint(hand[8], source, screen);
+    return { thumb, index, distance: fingerGuidance({ x: (thumb.x + index.x) / 2, y: (thumb.y + index.y) / 2 }, primary.rect, screen).fraction };
+  }).filter(({thumb,index}) => [thumb,index].every(p => p.x >= 0 && p.x <= viewport.width && p.y >= 0 && p.y <= viewport.height))
+    .sort((a,b) => a.distance - b.distance)[0] : undefined;
+  const guidance = primary && nearestHand
+    ? `엄지: ${fingerGuidance(nearestHand.thumb, primary.rect, screen).text}. 검지: ${fingerGuidance(nearestHand.index, primary.rect, screen).text}.`
+    : '';
+  const speechEnabled = useSceneSpeech(primary && !primary.item.missing ? primary.item : undefined, guidance, listening);
+
   useEffect(() => {
-    mounted.current = true;
-    return () => { mounted.current = false; stream.current?.getTracks().forEach(t => t.stop()); window.speechSynthesis?.cancel(); };
+    const element = video.current;
+    if (!element) return;
+    const observer = new ResizeObserver(([entry]) => {
+      setViewport({ width: entry.contentRect.width, height: entry.contentRect.height });
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
   }, []);
-  function announce(text: string) {
-    if (!mounted.current) return;
-    setMessage(text);
-    if (sound && 'speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-      const speech = new SpeechSynthesisUtterance(text); speech.lang = 'ko-KR';
-      window.speechSynthesis.speak(speech);
+
+  useEffect(() => () => {
+    const current = recognition.current;
+    if (current) {
+      current.onresult = null;
+      current.onerror = null;
+      current.onend = null;
+      current.abort();
+      recognition.current = null;
     }
-  }
-  async function startCamera() {
-    if (starting.current) return;
-    if (!navigator.mediaDevices?.getUserMedia) {
-      announce('이 환경에서는 카메라를 사용할 수 없습니다. HTTPS로 접속하거나 사진 선택을 이용해 주세요.'); return;
+  }, []);
+
+  function toggleVoice() {
+    window.speechSynthesis?.cancel();
+    if (recognition.current) {
+      recognition.current.stop();
+      return;
     }
-    starting.current = true;
+    const speechWindow = window as Window & {
+      SpeechRecognition?: new () => VoiceRecognition;
+      webkitSpeechRecognition?: new () => VoiceRecognition;
+    };
+    const Recognition = speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition;
+    if (!Recognition) {
+      setVoiceMessage('이 브라우저에서는 음성 인식을 지원하지 않습니다.');
+      return;
+    }
+    const current = new Recognition();
+    current.lang = 'ko-KR';
+    current.continuous = false;
+    current.interimResults = true;
+    let receivedResult = false;
+    let failed = false;
+    current.onresult = event => {
+      const text = Array.from(event.results, result => result[0].transcript).join(' ').trim();
+      if (text) {
+        receivedResult = true;
+        setVoiceMessage(text);
+      }
+    };
+    current.onerror = event => {
+      failed = true;
+      setVoiceMessage(event.error === 'not-allowed' || event.error === 'service-not-allowed'
+        ? '마이크 권한을 허용한 뒤 다시 눌러 주세요.'
+        : event.error === 'no-speech'
+          ? '음성이 들리지 않았어요. 다시 눌러 말씀해 주세요.'
+          : '음성 인식을 사용할 수 없습니다. 마이크와 네트워크를 확인해 주세요.');
+    };
+    current.onend = () => {
+      recognition.current = null;
+      setListening(false);
+      if (!receivedResult && !failed) setVoiceMessage('음성 인식을 종료했습니다.');
+    };
+    recognition.current = current;
     try {
-      const next = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
-      if (!mounted.current) { next.getTracks().forEach(t => t.stop()); return; }
-      stream.current?.getTracks().forEach(t => t.stop()); stream.current = next;
-      if (video.current) { video.current.srcObject = next; await video.current.play(); }
-      setCamera(true); announce('카메라가 켜졌습니다. 휴대폰을 물건 쪽으로 향한 뒤 촬영해 주세요.');
+      current.start();
+      setListening(true);
+      setVoiceMessage('듣고 있어요. 말씀해 주세요.');
     } catch {
-      stream.current?.getTracks().forEach(t => t.stop()); stream.current = null;
-      setCamera(false); announce('카메라를 켤 수 없습니다. 카메라 권한을 확인하거나 사진 선택을 이용해 주세요.');
-    } finally { starting.current = false; }
+      recognition.current = null;
+      setListening(false);
+      setVoiceMessage('음성 인식을 시작하지 못했습니다. 다시 눌러 주세요.');
+    }
   }
-  function stopCamera() {
-    stream.current?.getTracks().forEach(t => t.stop()); stream.current = null;
-    if (video.current) video.current.srcObject = null;
-    setCamera(false); announce('카메라를 껐습니다.');
-  }
-  async function submit(blob: Blob) {
-    if (busy) return;
-    if (blob.size > 8 * 1024 * 1024) { announce('사진 크기는 8MB 이하여야 합니다.'); return; }
-    setBusy(true); announce('사진을 전송하고 있습니다.');
-    try { const result = await detect(blob, target); announce(result.mode === 'demo' ? `연결 확인 모드입니다. 실제 탐지 결과가 아닙니다. ${result.message}` : result.message); }
-    catch (error) { announce(error instanceof Error ? error.message : '서버에 연결할 수 없습니다.'); }
-    finally { if (mounted.current) setBusy(false); }
-  }
-  async function capture() {
-    const source = video.current;
-    if (!source?.videoWidth) { announce('카메라를 준비하고 있습니다. 잠시 후 다시 촬영해 주세요.'); return; }
-    const canvas = document.createElement('canvas');
-    const scale = Math.min(1, 1280 / source.videoWidth);
-    canvas.width = Math.round(source.videoWidth * scale); canvas.height = Math.round(source.videoHeight * scale);
-    canvas.getContext('2d')!.drawImage(source, 0, 0, canvas.width, canvas.height);
-    const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/jpeg', .85));
-    if (blob) await submit(blob); else announce('사진을 촬영하지 못했습니다. 다시 시도해 주세요.');
-  }
-  return <><a className="skip" href="#main">본문으로 바로가기</a>
-    <header><a className="brand" href="/">손길<span>물건 찾기 도우미</span></a><span className="badge">개발 버전</span></header>
-    <main id="main"><section className="intro"><p className="eyebrow">일상 속 작은 도움</p><h1>찾고 싶은 물건,<br/>함께 찾아볼까요?</h1><p>물건을 선택하고 사진을 찍으면<br/>결과를 소리로 안내해 드려요.</p></section>
-      <aside className="notice"><strong>백엔드 연결을 준비하고 있어요.</strong><p>카메라와 음성 안내를 사용할 수 있어요. 물건을 찾으려면 별도 탐지 서버 연결이 필요해요.</p></aside>
-      <section className="panel" aria-labelledby="target-heading"><h2 id="target-heading"><span className="step">1</span> 무엇을 찾으세요?</h2><div className="targets" role="group" aria-label="찾을 물건">{targets.map(([value, label]) => <button key={value} aria-pressed={target === value} disabled={busy} onClick={() => { setTarget(value); announce(`${label}을 선택했습니다.`); }}>{label}</button>)}</div></section>
-      <section className="panel" aria-labelledby="camera-heading"><h2 id="camera-heading"><span className="step">2</span> 주변을 비춰 주세요</h2><div className="viewfinder"><video ref={video} muted playsInline aria-label="후면 카메라 미리보기" hidden={!camera}/>{!camera && <div className="placeholder"><span aria-hidden="true">◎</span><strong>카메라가 꺼져 있어요</strong><p>아래 버튼으로 카메라를 켜 주세요</p></div>}</div>
-        {!camera ? <button className="primary" onClick={startCamera} disabled={busy}>카메라 켜기</button> : <><button className="primary" disabled={busy} onClick={capture}>{busy ? '사진 전송 중…' : '촬영하고 결과 듣기'}</button><button className="secondary" onClick={stopCamera} disabled={busy}>카메라 끄기</button></>}
-        <label className={`upload ${busy ? 'disabled' : ''}`}>사진 선택하기<input type="file" accept="image/jpeg,image/png,image/webp" disabled={busy} onChange={e => { const file = e.target.files?.[0]; if (file) void submit(file); e.target.value = ''; }}/></label><p className="hint">촬영한 사진은 연결된 분석 서버로 전송돼요.</p>
-      </section>
-      <section className="result" aria-labelledby="result-heading" aria-busy={busy}><h2 id="result-heading">음성 안내</h2><p role="status" aria-live="polite" aria-atomic="true">{message}</p><button className="secondary" onClick={() => announce(message)}>안내 다시 듣기</button><label className="sound"><input type="checkbox" checked={sound} onChange={e => { setSound(e.target.checked); if (!e.target.checked) window.speechSynthesis?.cancel(); }}/> 음성 안내 사용</label></section>
-    </main><footer>손길 · 한 번에 하나씩, 천천히 찾아요.</footer></>;
+
+  useEffect(() => {
+    let disposed = false;
+    let stream: MediaStream | null = null;
+    const element = video.current;
+
+    async function startCamera() {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setStatus('카메라를 사용할 수 없습니다. HTTPS 또는 localhost로 접속해 주세요.');
+        return;
+      }
+      try {
+        const next = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: 'environment' },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+            frameRate: { ideal: 30, max: 30 },
+          },
+          audio: false,
+        });
+        if (disposed) {
+          next.getTracks().forEach(track => track.stop());
+          return;
+        }
+        stream = next;
+        if (element) {
+          element.srcObject = next;
+          await element.play();
+        }
+        if (!disposed) { setStatus('카메라가 켜졌습니다.'); setCameraReady(true); }
+      } catch {
+        stream?.getTracks().forEach(track => track.stop());
+        if (!disposed) {
+          if (element) element.srcObject = null;
+          setStatus('카메라를 켤 수 없습니다. 브라우저의 카메라 권한과 연결 상태를 확인한 뒤 새로고침해 주세요.');
+        }
+      }
+    }
+
+    void startCamera();
+    return () => {
+      disposed = true;
+      stream?.getTracks().forEach(track => track.stop());
+      if (element && element.srcObject === stream) element.srcObject = null;
+    };
+  }, []);
+
+  return <main className="camera-screen">
+    <video ref={video} autoPlay muted playsInline aria-label="카메라 미리보기" />
+    <div className="detection-overlay" aria-hidden="true">
+      {visible.map(({ item, rect }) => {
+        const isPrimary = item.id === primary?.item.id;
+        return <div key={item.id} className={`detection-box ${isPrimary ? 'is-primary' : 'is-secondary'}${item.missing ? ' is-missing' : ''}`} style={{ left: rect.x, top: rect.y, width: rect.width, height: rect.height }}>
+          {isPrimary && <>
+            <i className="frame-corner top-left" /><i className="frame-corner top-right" />
+            <i className="frame-corner bottom-left" /><i className="frame-corner bottom-right" />
+            <span className="detection-label">{item.label}</span>
+          </>}
+        </div>;
+      })}
+    </div>
+    {!personSelected && <HandOverlay hands={hands} source={source} viewport={screen} />}
+    <p className="detection-status" role="status" aria-live="polite">
+      {cameraReady ? (primary ? `${primary.item.label} ${primary.item.missing ? '다시 찾는 중' : '인식 중'}` : detectionMessage) : status}
+      <span className="tracking-status">{personSelected ? '사람 인식 중 · 손 추적 일시 중지' : handMessage}{!speechEnabled && ' · 화면을 터치하면 음성 안내 시작'}</span>
+    </p>
+    <div className="voice-controls">
+      {guidance && <p className="hand-guidance">{guidance}<small>화면 기준 상대 간격 · 실제 거리와 접촉 여부는 알 수 없어요</small></p>}
+      {voiceMessage && <p className="voice-message" role="status" aria-live="polite">{voiceMessage}</p>}
+      <button type="button" className={`voice-button${listening ? ' is-listening' : ''}`}
+        aria-label={listening ? '음성 인식 중지' : '음성 인식 시작'}
+        aria-pressed={listening} onClick={toggleVoice}>
+        {listening ? <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="3" fill="currentColor" /></svg>
+          : <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+            <rect x="9" y="3" width="6" height="12" rx="3" />
+            <path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8" />
+          </svg>}
+      </button>
+    </div>
+  </main>;
 }
-createRoot(document.getElementById('root')!).render(<StrictMode><App/></StrictMode>);
+
+createRoot(document.getElementById('root')!).render(<StrictMode><App /></StrictMode>);
