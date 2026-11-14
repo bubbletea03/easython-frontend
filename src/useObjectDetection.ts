@@ -1,9 +1,9 @@
-import { useEffect, useState, type RefObject } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { Detection } from '@mediapipe/tasks-vision';
 import { updateTracks, TRACK_HOLD_MS, type DetectionBox, type DetectionTrack } from './detectionTracks';
 import type { NormalizedLandmark } from '@mediapipe/tasks-vision';
 
-const labels: Record<string, string> = {
+export const labels: Record<string, string> = {
   person: '사람', bicycle: '자전거', car: '자동차', motorcycle: '오토바이', airplane: '비행기', bus: '버스',
   train: '기차', truck: '트럭', boat: '배', 'traffic light': '신호등', 'fire hydrant': '소화전',
   'stop sign': '정지 표지판', 'parking meter': '주차 요금기', bench: '벤치', bird: '새', cat: '고양이',
@@ -21,14 +21,19 @@ const labels: Record<string, string> = {
   scissors: '가위', 'teddy bear': '곰 인형', 'hair drier': '헤어드라이어', toothbrush: '칫솔',
 };
 
-export function useObjectDetection(video: RefObject<HTMLVideoElement | null>, cameraReady: boolean) {
+export function useObjectDetection(video: RefObject<HTMLVideoElement | null>, cameraReady: boolean,
+  options: { enabled: boolean; objects: boolean; targets: string[] | null; personSelected: boolean }) {
   const [detections, setDetections] = useState<DetectionTrack[]>([]);
   const [message, setMessage] = useState('');
   const [hands, setHands] = useState<NormalizedLandmark[][]>([]);
   const [handMessage, setHandMessage] = useState('손 추적 준비 중');
+  const targetKey = options.targets?.join(',') ?? '';
+  const personSelected = useRef(options.personSelected);
+  personSelected.current = options.personSelected;
 
   useEffect(() => {
-    if (!cameraReady) return;
+    setDetections([]); setHands([]);
+    if (!cameraReady || !options.enabled) return;
     let disposed = false;
     let busy = false;
     let ready = false;
@@ -78,7 +83,9 @@ export function useObjectDetection(video: RefObject<HTMLVideoElement | null>, ca
         const items: DetectionBox[] = (data.detections as Detection[]).flatMap(item => {
           const box = item.boundingBox;
           const category = item.categories[0];
-          if (!box || !category) return [];
+          if (!box || !category || category.score < 0.65) return [];
+          const aliases: Record<string, string> = { mug: 'cup', tumbler: 'cup', 'remote control': 'remote', 'mobile phone': 'cell phone', phone: 'cell phone', 'water bottle': 'bottle' };
+          if (targetKey && !targetKey.split(',').some(t => (aliases[t] ?? t) === category.categoryName)) return [];
           const label = category.categoryName === 'cup' || category.categoryName === 'bowl'
             ? (box.height >= box.width ? '컵' : '보울') : labels[category.categoryName] ?? category.categoryName;
           return [{ label, score: category.score,
@@ -87,14 +94,14 @@ export function useObjectDetection(video: RefObject<HTMLVideoElement | null>, ca
         });
         tracks = updateTracks(tracks, items, performance.now(), () => nextTrackId++);
         setDetections(tracks);
-        setMessage(items.length ? `${items.length}개 물체 탐지 중` : '물체를 찾고 있어요.');
+        setMessage(items.length ? `${items.length}개 물체 탐지 중` : targetKey ? '로컬 지원 물체 중 대상을 찾고 있어요. 일부 물체는 서버 연결이 필요합니다.' : '물체를 찾고 있어요.');
       } else if (data.type === 'error') {
         clearTimeout(loadTimeout);
         console.error('Object detection:', data.message);
         fail();
       }
     };
-    worker.postMessage({ type: 'init', baseUrl: new URL(import.meta.env.BASE_URL, location.href).href });
+    worker.postMessage({ type: 'init', baseUrl: new URL(import.meta.env.BASE_URL, location.href).href, objects: options.objects });
 
     async function capture() {
       const source = video.current;
@@ -111,7 +118,7 @@ export function useObjectDetection(video: RefObject<HTMLVideoElement | null>, ca
         if (disposed || failed) { bitmap.close(); return; }
         frameSize = { width: bitmap.width, height: bitmap.height };
         worker.postMessage({ type: 'frame', frame: bitmap, timestamp: now,
-          viewportWidth: source.clientWidth, viewportHeight: source.clientHeight }, [bitmap]);
+          viewportWidth: source.clientWidth, viewportHeight: source.clientHeight, personSelected: personSelected.current }, [bitmap]);
       } catch {
         if (!disposed) fail();
       }
@@ -131,7 +138,7 @@ export function useObjectDetection(video: RefObject<HTMLVideoElement | null>, ca
       document.removeEventListener('visibilitychange', clearOnHide);
       worker.terminate();
     };
-  }, [video, cameraReady]);
+  }, [video, cameraReady, options.enabled, options.objects, targetKey]);
 
   return { detections, detectionMessage: message, hands, handMessage };
 }

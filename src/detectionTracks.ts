@@ -10,8 +10,8 @@ function overlap(a: DetectionBox, b: DetectionBox) {
 }
 
 // Keep DOM identity across reordered results and bridge short detection gaps.
-export function updateTracks(previous: DetectionTrack[], boxes: DetectionBox[], now: number, nextId: () => number) {
-  const active = previous.filter(track => now - track.lastSeen < TRACK_HOLD_MS);
+export function updateTracks(previous: DetectionTrack[], boxes: DetectionBox[], now: number, nextId: () => number, holdMs = TRACK_HOLD_MS) {
+  const active = previous.filter(track => now - track.lastSeen < holdMs);
   const candidates = active.flatMap((track, trackIndex) => boxes.flatMap((box, boxIndex) => {
     const score = track.label === box.label ? overlap(track, box) : 0;
     return score >= 0.15 ? [{ trackIndex, boxIndex, score }] : [];

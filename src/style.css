@@ -54,7 +54,15 @@ body,
   width: calc(100% - 40px);
   max-width: 420px;
   pointer-events: none;
+  max-height: calc(100dvh - 160px);
+  overflow-y: auto;
 }
+
+.search-actions button { border: 1px solid #ffffff66; border-radius: 12px; padding: 10px 12px; background: #10241ee6; color: white; font: 600 13px system-ui; min-height: 44px; cursor: pointer; }
+.search-actions { display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; pointer-events: auto; }
+.search-actions button:disabled, .voice-button:disabled { opacity: .5; cursor: wait; }
+.search-actions button:focus-visible { outline: 3px solid #74f3ac; outline-offset: 2px; }
+.handle-point { position: absolute; width: 22px; height: 22px; transform: translate(-50%, -50%); border: 3px solid white; border-radius: 50%; background: #ffb24a; box-shadow: 0 0 16px #ffb24a; pointer-events: none; }
 
 .detection-overlay {
   position: absolute;

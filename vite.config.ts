@@ -3,12 +3,15 @@ import basicSsl from '@vitejs/plugin-basic-ssl';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
+  const proxy = { '/api': {
+    target: env.API_PROXY_TARGET || 'http://127.0.0.1:8000', changeOrigin: true,
+    rewrite: (path: string) => path.replace(/^\/api(?=\/|$)/, ''),
+  } };
   return {
     plugins: mode === 'https' ? [basicSsl()] : [],
     server: {
-      proxy: env.API_PROXY_TARGET ? {
-        '/api': { target: env.API_PROXY_TARGET, changeOrigin: true },
-      } : undefined,
+      proxy,
     },
+    preview: { proxy },
   };
 });

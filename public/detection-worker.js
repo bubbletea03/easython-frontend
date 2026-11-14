@@ -7,9 +7,9 @@ self.onmessage = async ({ data }) => {
   if (data.type === 'init') {
     try {
       const files = await Vision.FilesetResolver.forVisionTasks(data.baseUrl + 'mediapipe');
-      detector = await Vision.ObjectDetector.createFromOptions(files, {
+      detector = data.objects === false ? undefined : await Vision.ObjectDetector.createFromOptions(files, {
         baseOptions: { modelAssetPath: data.baseUrl + 'models/efficientdet_lite0.tflite', delegate: 'CPU' },
-        runningMode: 'VIDEO', scoreThreshold: 0.5, maxResults: 10,
+        runningMode: 'VIDEO', scoreThreshold: 0.65, maxResults: 10,
       });
       self.postMessage({ type: 'ready' });
     } catch (error) {
@@ -31,8 +31,7 @@ self.onmessage = async ({ data }) => {
   }
   if (data.type === 'frame') {
     try {
-      if (!detector) throw new Error('Detector is not ready');
-      const result = detector.detectForVideo(data.frame, data.timestamp);
+      const result = detector ? detector.detectForVideo(data.frame, data.timestamp) : { detections: [] };
       // Match the UI's largest visible box, including object-fit: cover cropping.
       const viewportWidth = data.viewportWidth || data.frame.width;
       const viewportHeight = data.viewportHeight || data.frame.height;
@@ -40,7 +39,7 @@ self.onmessage = async ({ data }) => {
       const offsetX = (data.frame.width * scale - viewportWidth) / 2;
       const offsetY = (data.frame.height * scale - viewportHeight) / 2;
       let largestArea = 0;
-      let personSelected = false;
+      let personSelected = !!data.personSelected;
       for (const detection of result.detections) {
         const box = detection.boundingBox;
         if (!box) continue;
