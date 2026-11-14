@@ -16,7 +16,7 @@
 
 ## 실제 실행 화면
 
-Samsung Internet에서 촬영한 실행 화면입니다. 컵을 찾고 손을 안내하는 과정과 가위의 손잡이 확인·주의 안내를 담았습니다.
+컵을 찾고 손을 안내하는 과정과 가위의 손잡이 확인·주의 안내를 담았습니다.
 
 ### 1. 화면을 누르고, 찾을 물건 말하기
 
@@ -110,6 +110,40 @@ Samsung Internet에서 촬영한 실행 화면입니다. 컵을 찾고 손을 �
 
 ## 기술 스택 및 구조
 
+```mermaid
+flowchart TB
+  subgraph Phone["휴대폰 브라우저 (모바일 웹 앱)"]
+    UI["React 19 · TypeScript · Vite"]
+    MP["MediaPipe (Web Worker)<br/>손 추적 · 대체 물체 탐지"]
+    STT["Web Speech API<br/>음성 명령 인식 · 대체 음성"]
+    AUD["Web Audio · Vibration · Wake Lock"]
+  end
+
+  subgraph Vercel["Vercel"]
+    HOST["정적 호스팅<br/>Git push 자동 배포"]
+    PROXY["Vercel Function 프록시<br/>API 키 서버 보관"]
+  end
+
+  subgraph GCP["GCP GPU 서버 (Deep Learning VM)"]
+    CF["Cloudflare Tunnel<br/>HTTPS 공개 주소"]
+    API["FastAPI · Uvicorn<br/>인증 · 요청 제한 · 배치 대기열"]
+    YOLO["YOLOE-26 (Ultralytics)<br/>PyTorch · CUDA · FP16"]
+    CV["OpenCV<br/>HSV 색상 필터"]
+  end
+
+  subgraph AI["외부 AI API"]
+    GEM["Google Gemini<br/>명령 해석 · 잡는 법 설명"]
+    EL["ElevenLabs<br/>한국어 음성 합성"]
+  end
+
+  UI --> PROXY
+  HOST -.-> UI
+  PROXY --> CF --> API
+  API --> YOLO --> CV
+  API --> GEM
+  API --> EL
+```
+
 | 구분 | 기술 | 역할 |
 | --- | --- | --- |
 | 프론트엔드 | React 19, TypeScript 5.9 | 화면 구성, 상태 관리, 안내 로직 |
@@ -132,49 +166,3 @@ flowchart TD
 ```
 
 탐지·설명을 위해 캡처한 이미지는 백엔드로 전송합니다. 손 추적은 브라우저 내부에서 처리하며, 안내 음성은 **고정 녹음 → 서버 TTS → 브라우저 TTS** 순으로 대체할 수 있도록 구성했습니다.
-
-## 로컬 실행
-
-Node.js 24와 npm을 사용합니다. 전체 기능을 실행하려면 별도 백엔드 서버와 API 키가 필요합니다.
-
-```sh
-npm ci
-```
-
-`.env.example`을 `.env.local`로 복사한 뒤 백엔드 주소와 키를 설정합니다.
-
-```dotenv
-VITE_API_BASE_URL=/api
-BACKEND_API_URL=http://127.0.0.1:8000
-BACKEND_API_KEY=your-backend-api-key
-```
-
-`BACKEND_API_KEY`는 Vite/Vercel 서버에서 요청에 추가하며 브라우저 번들에 포함하지 않습니다. 실제 키를 저장소에 커밋하지 않습니다.
-
-```sh
-npm run dev -- --mode https --port 5173
-```
-
-스마트폰과 개발 PC를 같은 Wi-Fi에 연결한 뒤 터미널에 표시되는 **Network HTTPS 주소**로 접속합니다. 로컬 개발 인증서 확인이 필요할 수 있으며, 브라우저의 카메라·마이크 권한을 허용해야 합니다. Windows PowerShell에서 `npm` 실행이 제한되면 `npm.cmd`를 사용합니다.
-
-테스트와 프로덕션 빌드는 다음 명령으로 실행합니다.
-
-```sh
-npm test
-npm run build
-node scripts/check-build.mjs dist
-```
-
-## 현재 범위와 한계
-
-현재 구현은 카메라 영상의 **2차원 좌표를 기반으로 한 안내 프로토타입**입니다. “거기예요”라는 안내는 화면상 손과 목표 위치가 정렬되었다는 뜻이며, 실제 거리·접촉·물건을 잡았는지는 판정하지 않습니다.
-
-조명, 가림, 촬영 각도와 네트워크 상태에 따라 인식 및 안내 품질이 달라질 수 있습니다. 잡을 위치와 위험 구역도 영상 기반 추정이며, 음성 인식·진동 지원은 기기와 브라우저에 따라 차이가 있습니다.
-
-## 상세 문서
-
-- [백엔드 연동 및 설정](docs/backend-integration.md)
-- [API 계약](docs/api.md)
-- [화면 상태와 안내 규칙](docs/status-frame-ui.md)
-- [사용성 개선 기록](docs/usability-fixes.md)
-- [배포 설정](docs/deployment.md)
