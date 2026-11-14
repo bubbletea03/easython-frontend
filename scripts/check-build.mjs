@@ -7,6 +7,8 @@ const files = [
   'mediapipe/vision_wasm_internal.js', 'mediapipe/vision_wasm_internal.wasm',
   'mediapipe/vision_wasm_module_internal.js', 'mediapipe/vision_wasm_module_internal.wasm',
   'models/efficientdet_lite0.tflite', 'models/hand_landmarker.task',
+  'fonts/pretendard-sub-500.woff2', 'fonts/pretendard-sub-600.woff2',
+  'fonts/pretendard-sub-700.woff2', 'fonts/pretendard-sub-800.woff2',
 ];
 for (const file of files) {
   const path = resolve(root, file);

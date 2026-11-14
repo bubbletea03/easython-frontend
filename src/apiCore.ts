@@ -1,7 +1,7 @@
 export type Health = { status: 'ok' | 'loading' | 'error'; model_loaded: boolean; describe_enabled: boolean; device: string; error?: string | null };
 export type ServerDetection = { label: string; target: string; score: number; box: { x: number; y: number; w: number; h: number } };
 export type ParseResult = { intent: 'find' | 'where' | 'how' | 'stop' | 'unknown'; object_ko: string | null; targets: string[] };
-export type Description = { sentences: string[]; handlePoint?: { x: number; y: number } };
+export type Description = { sentences: string[]; safety?: string; handlePoint?: { x: number; y: number } };
 export const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const unit = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1;
 
@@ -105,5 +105,6 @@ export function readDescription(result: unknown): Description {
   if (!record(result)) return { sentences: [] };
   const sentences = ['safety', 'grasp', 'comment'].flatMap(key => typeof result[key] === 'string' && result[key].trim() ? [result[key].trim()] : []);
   const point = result.handle_point;
-  return { sentences, ...(record(point) && unit(point.x) && unit(point.y) ? { handlePoint: { x: point.x, y: point.y } } : {}) };
+  return { sentences, ...(typeof result.safety === 'string' && result.safety.trim() ? { safety: result.safety.trim() } : {}),
+    ...(record(point) && unit(point.x) && unit(point.y) ? { handlePoint: { x: point.x, y: point.y } } : {}) };
 }

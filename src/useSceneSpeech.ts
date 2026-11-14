@@ -23,7 +23,7 @@ export function useSceneSpeech(target: { id: number; label: string } | undefined
         return;
       }
       if (candidate.current.id !== current.id) candidate.current = { id: current.id, since: now };
-      if (now - candidate.current.since < 1000 || window.speechSynthesis.speaking || window.speechSynthesis.pending || now - lastSpokenAt < 5000) return;
+      if (now - candidate.current.since < 1000 || window.speechSynthesis.speaking || window.speechSynthesis.pending || now - lastSpokenAt < (text ? 1500 : 5000)) return;
       const isNew = announced !== current.id;
       if (!isNew && !text) return;
       const lastCharacter = current.label.charCodeAt(current.label.length - 1);
